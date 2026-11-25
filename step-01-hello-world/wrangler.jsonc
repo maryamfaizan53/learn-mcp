@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "learn-mcp-step-01",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-25",
+  // agents/mcp/server uses AsyncLocalStorage, which Workers only exposes under nodejs_compat.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  }
+}

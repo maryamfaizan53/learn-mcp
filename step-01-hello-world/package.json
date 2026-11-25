@@ -1,0 +1,23 @@
+{
+  "name": "learn-mcp-step-01",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "agents": "^0.34.1",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.9.2",
+    "@cloudflare/workers-types": "^5.20261125.1",
+    "typescript": "^5.9.0",
+    "vitest": "^5.1.2",
+    "wrangler": "^4.168.0"
+  }
+}

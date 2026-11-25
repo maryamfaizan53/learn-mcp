@@ -1,0 +1,2 @@
+# No secrets are needed for step 1 (no auth, no upstream API).
+# This file exists so later steps can follow the same `wrangler secret put` / `.dev.vars` pattern.
