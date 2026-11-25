@@ -1,10 +1,27 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
+import { createNote, deleteNote, getNote, listNotes } from "./notes";
+
+const NOTE_ID_DESCRIPTION = "The note's id, as returned by list_notes or create_note.";
+
+function noteNotFoundError(id: string) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `No note with id "${id}" exists. Call list_notes to see which ids are valid.`,
+      },
+    ],
+    isError: true,
+  };
+}
 
 // Called once per request by createMcpHandler, never reused across requests:
 // nothing about one caller's request may leak into another's through this
-// function or anything it closes over.
+// function or anything it closes over. The notes themselves live in the
+// NOTES KV namespace (see notes.ts), not here, so every copy of this Worker
+// sees the same notes.
 function createServer(): McpServer {
   const server = new McpServer({
     name: "learn-mcp-step-02",
@@ -12,61 +29,109 @@ function createServer(): McpServer {
   });
 
   server.registerTool(
-    "greet",
+    "list_notes",
     {
       description:
-        "Greet a person by name. Returns a short, friendly one-line greeting that includes the given name.",
-      inputSchema: {
-        name: z.string().min(1).describe("The person's name to greet."),
-      },
+        "List every saved note as its id, a short preview of its content, and when it was created. " +
+        "Call this first to find a note's id before using get_note or delete_note.",
+      outputSchema: z.object({
+        notes: z.array(
+          z.object({
+            id: z.string(),
+            preview: z.string(),
+            createdAt: z.string(),
+          }),
+        ),
+      }),
       annotations: { readOnlyHint: true },
     },
-    async ({ name }) => ({
-      content: [{ type: "text", text: `Hello, ${name}! Welcome to learn-mcp-step-02.` }],
-    }),
+    async () => {
+      const notes = await listNotes();
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              notes.length === 0
+                ? "No notes yet. Use create_note to add one."
+                : notes.map((n) => `${n.id}: ${n.preview}`).join("\n"),
+          },
+        ],
+        structuredContent: { notes },
+      };
+    },
   );
 
   server.registerTool(
-    "get_time",
+    "get_note",
     {
-      description:
-        "Get the current date and time. Pass an IANA timezone name (e.g. 'America/New_York', 'Asia/Karachi') " +
-        "to get the time in that zone; omit it to get the time in UTC.",
+      description: "Get one note's full content by id.",
       inputSchema: {
-        timezone: z
-          .string()
-          .optional()
-          .describe(
-            "An IANA timezone name, e.g. 'Asia/Karachi' or 'Europe/London'. Defaults to UTC when omitted.",
-          ),
+        id: z.string().min(1).describe(NOTE_ID_DESCRIPTION),
       },
+      outputSchema: z.object({
+        id: z.string(),
+        content: z.string(),
+        createdAt: z.string(),
+      }),
       annotations: { readOnlyHint: true },
     },
-    async ({ timezone }) => {
-      const zone = timezone ?? "UTC";
-      let formatted: string;
-      try {
-        // Intl.DateTimeFormat throws a RangeError for a timeZone string it
-        // doesn't recognize as a valid IANA name.
-        formatted = new Intl.DateTimeFormat("en-US", {
-          timeZone: zone,
-          dateStyle: "full",
-          timeStyle: "long",
-        }).format(new Date());
-      } catch {
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `"${zone}" isn't a valid IANA timezone name. Try one like "America/New_York" ` +
-                `or "Asia/Karachi", or omit timezone for UTC.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-      return { content: [{ type: "text", text: `Current time in ${zone}: ${formatted}` }] };
+    async ({ id }) => {
+      const note = await getNote(id);
+      if (note === null) return noteNotFoundError(id);
+      return {
+        content: [{ type: "text", text: note.content }],
+        structuredContent: note,
+      };
+    },
+  );
+
+  server.registerTool(
+    "create_note",
+    {
+      description: "Save a new note and return its id, which later calls need to read or delete it.",
+      inputSchema: {
+        content: z
+          .string()
+          .min(1)
+          .max(2000)
+          .describe("The note's text, 1 to 2000 characters."),
+      },
+      outputSchema: z.object({
+        id: z.string(),
+        content: z.string(),
+        createdAt: z.string(),
+      }),
+    },
+    async ({ content }) => {
+      const note = await createNote(content);
+      return {
+        content: [{ type: "text", text: `Saved note ${note.id}.` }],
+        structuredContent: note,
+      };
+    },
+  );
+
+  server.registerTool(
+    "delete_note",
+    {
+      description: "Permanently delete a note by id. This cannot be undone.",
+      inputSchema: {
+        id: z.string().min(1).describe(NOTE_ID_DESCRIPTION),
+      },
+      outputSchema: z.object({
+        id: z.string(),
+        deleted: z.literal(true),
+      }),
+      annotations: { destructiveHint: true },
+    },
+    async ({ id }) => {
+      const existed = await deleteNote(id);
+      if (!existed) return noteNotFoundError(id);
+      return {
+        content: [{ type: "text", text: `Deleted note ${id}.` }],
+        structuredContent: { id, deleted: true },
+      };
     },
   );
 

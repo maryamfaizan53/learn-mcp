@@ -7,5 +7,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    // Run `npx wrangler kv namespace create NOTES` on a machine logged in to
+    // your own Cloudflare account, then replace the id below with the one it
+    // prints. `wrangler dev` (local, no --remote) works fine with this
+    // placeholder, but `wrangler deploy` needs your real namespace id.
+    { "binding": "NOTES", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
+  ]
 }
