@@ -2,8 +2,8 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 
-// Fixed-width names (all the same length) so no name is ever a substring of
-// another — "Name_01" would otherwise be contained in "Name_010".
+// Fixed-width, zero-padded names so none is ever a substring of another
+// (unpadded "Name_1" would be a substring of "Name_12", hiding a leak).
 const NAMES = Array.from({ length: 20 }, (_, i) => `Name_${String(i).padStart(2, "0")}`);
 
 function greetRequest(id: number, name: string): Request {

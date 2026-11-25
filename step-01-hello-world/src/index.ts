@@ -46,6 +46,8 @@ function createServer(): McpServer {
       const zone = timezone ?? "UTC";
       let formatted: string;
       try {
+        // Intl.DateTimeFormat throws a RangeError for a timeZone string it
+        // doesn't recognize as a valid IANA name.
         formatted = new Intl.DateTimeFormat("en-US", {
           timeZone: zone,
           dateStyle: "full",
