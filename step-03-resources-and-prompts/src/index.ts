@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, ResourceNotFoundError, ResourceTemplate } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { createNote, deleteNote, getNote, listNotes } from "./notes";
@@ -105,6 +105,13 @@ function createServer(): McpServer {
     },
     async ({ content }) => {
       const note = await createNote(content);
+      // `handler` (below) isn't assigned until the module finishes loading,
+      // but this closure only runs later, per request, by which time it is —
+      // same reason `env` works in notes.ts despite being imported at the
+      // top. Only reaches a client with an open subscriptions/listen stream
+      // on this same Worker isolate; fine for a teaching step, not a promise
+      // that every client sees it immediately.
+      handler.notify.resourcesChanged();
       return {
         content: [{ type: "text", text: `Saved note ${note.id}.` }],
         structuredContent: note,
@@ -128,11 +135,65 @@ function createServer(): McpServer {
     async ({ id }) => {
       const existed = await deleteNote(id);
       if (!existed) return noteNotFoundError(id);
+      handler.notify.resourcesChanged();
       return {
         content: [{ type: "text", text: `Deleted note ${id}.` }],
         structuredContent: { id, deleted: true },
       };
     },
+  );
+
+  const noteResourceTemplate = new ResourceTemplate("note://{id}", {
+    list: async () => ({
+      resources: (await listNotes()).map((note) => ({
+        uri: `note://${note.id}`,
+        name: note.preview,
+        mimeType: "text/plain",
+      })),
+    }),
+  });
+
+  server.registerResource(
+    "note",
+    noteResourceTemplate,
+    {
+      title: "Note",
+      description: "A saved note's full text, attachable directly to a conversation.",
+      mimeType: "text/plain",
+    },
+    async (uri, { id }) => {
+      const note = await getNote(String(id));
+      if (note === null) throw new ResourceNotFoundError(uri.href);
+      return { contents: [{ uri: uri.href, mimeType: "text/plain", text: note.content }] };
+    },
+  );
+
+  server.registerPrompt(
+    "summarize_notes",
+    {
+      title: "Summarize my notes",
+      description:
+        "Ask the model to gather saved notes (via list_notes/get_note, or any note:// resources " +
+        "already attached) and write a short summary, optionally limited to one tag or topic.",
+      argsSchema: { tag: z.string().optional().describe("Only summarize notes mentioning this tag or topic. Omit to summarize everything.") },
+    },
+    ({ tag }) => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: tag
+              ? `If any notes are already attached as note:// resources in this conversation, use ` +
+                `them directly; otherwise call list_notes and then get_note for each note that ` +
+                `looks related to "${tag}". Write a short summary of just those notes.`
+              : `If any notes are already attached as note:// resources in this conversation, use ` +
+                `them directly; otherwise call list_notes and then get_note for each note. Write a ` +
+                `short summary of all of them.`,
+          },
+        },
+      ],
+    }),
   );
 
   return server;
