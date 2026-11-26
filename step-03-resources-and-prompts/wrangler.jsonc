@@ -8,11 +8,9 @@
   "observability": {
     "enabled": true
   },
-  "kv_namespaces": [
-    // Step 3 gets its own namespace, separate from step 2's, so testing
-    // here never touches data from a step that's already been graded.
-    // Run `npx wrangler kv namespace create NOTES` and put the id it
-    // prints here before deploying.
-    { "binding": "NOTES", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
-  ]
+  // Step 3's own namespace, titled NOTES_STEP03 on Cloudflare (titles are
+  // account-wide and step 2 already used "NOTES"), but bound here as NOTES
+  // to match what src/notes.ts reads from env - the binding name is what
+  // matters in code, not the namespace's title.
+  "kv_namespaces": [{ "binding": "NOTES", "id": "b8c25cb2af77414c97ae6f1e43aeba2e" }]
 }
