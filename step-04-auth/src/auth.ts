@@ -16,22 +16,32 @@ declare global {
   }
 }
 
-function buildAuth() {
-  // The URL clients connect to. Tokens are bound to this exact resource
-  // (RFC 8707), so it must match the deployed /mcp URL precisely - no
-  // trailing slash, no query string.
-  // `npx auth generate`/`migrate` load this file through a stub `env` whose
-  // every property access returns a literal "env.<NAME>" placeholder string
-  // (confirmed by testing - not documented), so it can't give us a real
-  // MCP_BASE_URL to build a resource URL from. Detect that exact placeholder
-  // and fall back to a dummy absolute URL: the CLI only reads the schema
-  // these plugins declare, never serves real traffic with it.
+// The URL clients connect to. Tokens are bound to this exact resource
+// (RFC 8707), so it must match the deployed /mcp URL precisely - no
+// trailing slash, no query string. Exported so index.ts can pass the same
+// value to requireMcpAuth's `resource` option - its own default is just
+// the base URL, not `${baseURL}/mcp`, which would otherwise reject every
+// real access token mcp() issues as a different (wrong) audience.
+// `npx auth generate`/`migrate` load this file through a stub `env` whose
+// every property access returns a literal "env.<NAME>" placeholder string
+// (confirmed by testing - not documented), so it can't give us a real
+// MCP_BASE_URL to build a resource URL from. Detect that exact placeholder
+// and fall back to a dummy absolute URL: the CLI only reads the schema
+// these plugins declare, never serves real traffic with it.
+export function getMcpBaseUrl(): string {
   const rawMcpBaseUrl = env.MCP_BASE_URL;
-  const MCP_BASE_URL =
-    typeof rawMcpBaseUrl === "string" && !rawMcpBaseUrl.startsWith("env.")
-      ? rawMcpBaseUrl
-      : "https://placeholder.invalid";
-  const MCP_RESOURCE = `${MCP_BASE_URL}/mcp`;
+  return typeof rawMcpBaseUrl === "string" && !rawMcpBaseUrl.startsWith("env.")
+    ? rawMcpBaseUrl
+    : "https://placeholder.invalid";
+}
+
+export function getMcpResource(): string {
+  return `${getMcpBaseUrl()}/mcp`;
+}
+
+function buildAuth() {
+  const MCP_BASE_URL = getMcpBaseUrl();
+  const MCP_RESOURCE = getMcpResource();
 
   // A Client ID Metadata Document is just the client's own metadata, served
   // by the client itself at an HTTPS URL that doubles as its client_id. cimd()
@@ -58,29 +68,15 @@ function buildAuth() {
       enabled: true,
     },
     plugins: [
-      // Signs the access tokens mcp() issues. definePayload adds the user's
-      // active company to the token itself, so tool handlers read it from the
-      // verified token - never from a tool argument the caller could fake.
-      // Role is deliberately NOT baked in here: it's looked up fresh from the
-      // membership table on every request (see index.ts), so a role change or
-      // removal takes effect on the next call instead of waiting for the
-      // token to expire.
-      jwt({
-        jwt: {
-          // Looked up directly rather than from session.activeOrganizationId:
-          // this step gives every user exactly one company (their personal
-          // one, created below) and has no company-switching tool, so "the
-          // membership row for this user" is unambiguous.
-          definePayload: async ({ user }) => {
-            const member = await env.DB.prepare(
-              "select organizationId from member where userId = ? limit 1",
-            )
-              .bind(user.id)
-              .first<{ organizationId: string }>();
-            return { orgId: member?.organizationId };
-          },
-        },
-      }),
+      // Required infrastructure for mcp()/oauth-provider's JWKS - signs the
+      // OAuth access tokens mcp() issues. `definePayload` only shapes the
+      // separate /token and id_token endpoints, not the OAuth access token
+      // itself (confirmed by testing: an access token minted through the
+      // real authorize -> token flow has no custom claims at all, just the
+      // standard sub/aud/client_id/scope/iss/exp set) - so the company is
+      // looked up from the verified `sub` in index.ts instead, not carried
+      // as a token claim.
+      jwt(),
       // Every user belongs to a company (tenant) with a role. A personal
       // company is created on first sign-in - see the user.create.after
       // hook below. creatorRole: "admin" keeps this step's two roles (member,

@@ -3,7 +3,7 @@ import { McpServer, ResourceNotFoundError, ResourceTemplate } from "@modelcontex
 import { createMcpHandler } from "agents/mcp/server";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
-import { getAuth } from "./auth";
+import { getAuth, getMcpResource } from "./auth";
 import { createNote, deleteNote, getNote, listNotes } from "./notes";
 import { getIdentity, identityStorage } from "./identity";
 import { consentPage, loginPage } from "./pages";
@@ -266,27 +266,39 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
-      const protectedMcp = requireMcpAuth(getAuth(), async (req, claims) => {
-        const userId = typeof claims.sub === "string" ? claims.sub : undefined;
-        const orgId = typeof claims.orgId === "string" ? claims.orgId : undefined;
-        if (!userId || !orgId) {
-          return jsonRpcError(403, "This token has no company. Sign in again to get one.");
-        }
-        // Looked up fresh on every request, never cached and never baked
-        // into the token, so a role change or removal takes effect on the
-        // very next call.
-        const member = await env.DB.prepare(
-          "select role from member where organizationId = ? and userId = ?",
-        )
-          .bind(orgId, userId)
-          .first<{ role: string }>();
-        if (!member) {
-          return jsonRpcError(403, "You are no longer a member of this company.");
-        }
-        return identityStorage.run({ userId, orgId, role: member.role }, () =>
-          handler(req as Parameters<typeof handler>[0], env, ctx),
-        );
-      });
+      const protectedMcp = requireMcpAuth(
+        getAuth(),
+        async (req, claims) => {
+          const userId = typeof claims.sub === "string" ? claims.sub : undefined;
+          if (!userId) {
+            return jsonRpcError(403, "This token has no subject.");
+          }
+          // The OAuth access token carries only the standard claims (sub,
+          // aud, client_id, scope, ...) - mcp()/oauth-provider doesn't let
+          // a plugin add custom ones to it. So the caller's company and
+          // role are both looked up here, fresh on every request, from
+          // the verified userId alone - never cached, never baked into
+          // the token, and never taken from a tool argument. Every user
+          // has exactly one company (their personal one) in this step, so
+          // this lookup is unambiguous.
+          const member = await env.DB.prepare(
+            "select organizationId, role from member where userId = ? limit 1",
+          )
+            .bind(userId)
+            .first<{ organizationId: string; role: string }>();
+          if (!member) {
+            return jsonRpcError(403, "You are no longer a member of any company.");
+          }
+          return identityStorage.run(
+            { userId, orgId: member.organizationId, role: member.role },
+            () => handler(req as Parameters<typeof handler>[0], env, ctx),
+          );
+        },
+        // requireMcpAuth's own default resource is just the base URL, not
+        // `${baseURL}/mcp` - without this override it rejects every real
+        // access token mcp() issues as bound to the wrong audience.
+        { resource: getMcpResource() },
+      );
       return protectedMcp(request);
     }
 
