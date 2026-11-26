@@ -3,7 +3,7 @@ import { McpServer, ResourceNotFoundError, ResourceTemplate } from "@modelcontex
 import { createMcpHandler } from "agents/mcp/server";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
-import { auth } from "./auth";
+import { getAuth } from "./auth";
 import { createNote, deleteNote, getNote, listNotes } from "./notes";
 import { getIdentity, identityStorage } from "./identity";
 import { consentPage, loginPage } from "./pages";
@@ -266,7 +266,7 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
-      const protectedMcp = requireMcpAuth(auth, async (req, claims) => {
+      const protectedMcp = requireMcpAuth(getAuth(), async (req, claims) => {
         const userId = typeof claims.sub === "string" ? claims.sub : undefined;
         const orgId = typeof claims.orgId === "string" ? claims.orgId : undefined;
         if (!userId || !orgId) {
@@ -292,6 +292,6 @@ export default {
 
     // Everything else (sign-in, sign-up, the OAuth authorize/token/consent
     // endpoints, discovery metadata) is Better Auth's own surface.
-    return auth.handler(request);
+    return getAuth().handler(request);
   },
 } satisfies ExportedHandler;

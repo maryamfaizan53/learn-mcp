@@ -33,5 +33,15 @@
   // deploying; localhost is only correct for `wrangler dev`.
   "vars": {
     "MCP_BASE_URL": "http://localhost:8787"
-  }
+  },
+  // @modelcontextprotocol/server imports zod via the "zod/v4" subpath,
+  // while better-auth's packages import plain "zod" - both resolve to the
+  // same underlying file, but as two different wrapper modules, which
+  // esbuild bundles as two separate copies of zod's internals. That's the
+  // confirmed cause of a "ZodLazy is not a constructor" crash at Worker
+  // startup (reproduced by isolating the Better Auth plugin stack alone,
+  // which builds fine - the crash only appears once @modelcontextprotocol/
+  // server's "zod/v4" import is in the same bundle too). Aliasing collapses
+  // both specifiers onto the exact same module.
+  "alias": { "zod/v4": "zod" }
 }
