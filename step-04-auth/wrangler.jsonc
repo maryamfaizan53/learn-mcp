@@ -24,7 +24,7 @@
     {
       "binding": "DB",
       "database_name": "learn-mcp-step-04-auth",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+      "database_id": "6a254ac6-9677-439b-afec-0d4afcd2bcb8"
     }
   ],
   // The exact URL this Worker is reachable at - tokens are bound to
