@@ -13,7 +13,7 @@
   // are account-wide on Cloudflare, so use a step-specific title (e.g.
   // NOTES_STEP04) when running `npx wrangler kv namespace create`, but keep
   // the binding itself NOTES to match what src/notes.ts reads from env.
-  "kv_namespaces": [{ "binding": "NOTES", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }],
+  "kv_namespaces": [{ "binding": "NOTES", "id": "5692b208d380488aa1c20e36c028c764" }],
   // Better Auth's own data (users, sessions, OAuth clients) - never the notes
   // themselves, which stay in KV. Run `npx wrangler d1 create learn-mcp-step-04-auth`
   // on a machine logged in to your own Cloudflare account, then replace the
@@ -32,7 +32,7 @@
   // it to the real https://learn-mcp-step-04.<subdomain>.workers.dev before
   // deploying; localhost is only correct for `wrangler dev`.
   "vars": {
-    "MCP_BASE_URL": "http://localhost:8787"
+    "MCP_BASE_URL": "https://learn-mcp-step-04.maryamfaizan-mcp.workers.dev"
   },
   // @modelcontextprotocol/server imports zod via the "zod/v4" subpath,
   // while better-auth's packages import plain "zod" - both resolve to the
