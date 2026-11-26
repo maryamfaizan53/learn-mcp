@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { getIdentity } from "./identity";
 
 // The binding this file reads, matching wrangler.jsonc's kv_namespaces entry.
 // `Cloudflare.Env` is the interface `cloudflare:workers`' own `env` export is
@@ -25,11 +26,20 @@ interface NoteMetadata {
   createdAt: string;
 }
 
-const KEY_PREFIX = "note:";
 const PREVIEW_LENGTH = 80;
 
+// Scoped to the signed-in caller's company and their own user ID, read from
+// the verified identity requireMcpAuth established for this request (see
+// index.ts) - never from anything the caller could put in a tool argument.
+// This is the entire mechanism keeping one user from reading or listing
+// another's notes, or one company's notes from another's.
+function keyPrefix(): string {
+  const { orgId, userId } = getIdentity();
+  return `org:${orgId}:user:${userId}:note:`;
+}
+
 function keyFor(id: string): string {
-  return `${KEY_PREFIX}${id}`;
+  return `${keyPrefix()}${id}`;
 }
 
 function preview(content: string): string {
@@ -38,9 +48,10 @@ function preview(content: string): string {
 
 export async function listNotes(): Promise<Array<{ id: string } & NoteMetadata>> {
   const { NOTES } = env;
-  const { keys } = await NOTES.list<NoteMetadata>({ prefix: KEY_PREFIX });
+  const prefix = keyPrefix();
+  const { keys } = await NOTES.list<NoteMetadata>({ prefix });
   return keys.map((key) => ({
-    id: key.name.slice(KEY_PREFIX.length),
+    id: key.name.slice(prefix.length),
     preview: key.metadata?.preview ?? "",
     createdAt: key.metadata?.createdAt ?? "",
   }));

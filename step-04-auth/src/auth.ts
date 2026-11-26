@@ -57,12 +57,35 @@ export const auth = betterAuth({
     enabled: true,
   },
   plugins: [
-    // Signs the access tokens mcp() issues.
-    jwt(),
+    // Signs the access tokens mcp() issues. definePayload adds the user's
+    // active company to the token itself, so tool handlers read it from the
+    // verified token - never from a tool argument the caller could fake.
+    // Role is deliberately NOT baked in here: it's looked up fresh from the
+    // membership table on every request (see index.ts), so a role change or
+    // removal takes effect on the next call instead of waiting for the
+    // token to expire.
+    jwt({
+      jwt: {
+        // Looked up directly rather than from session.activeOrganizationId:
+        // this step gives every user exactly one company (their personal
+        // one, created below) and has no company-switching tool, so "the
+        // membership row for this user" is unambiguous.
+        definePayload: async ({ user }) => {
+          const member = await env.DB.prepare(
+            "select organizationId from member where userId = ? limit 1",
+          )
+            .bind(user.id)
+            .first<{ organizationId: string }>();
+          return { orgId: member?.organizationId };
+        },
+      },
+    }),
     // Every user belongs to a company (tenant) with a role. A personal
     // company is created on first sign-in - see the user.create.after
-    // hook below.
-    organization(),
+    // hook below. creatorRole: "admin" keeps this step's two roles (member,
+    // admin) exactly as planned, instead of Better Auth's default "owner"
+    // for whoever creates a company.
+    organization({ creatorRole: "admin" }),
     // The actual OAuth 2.1 / OIDC authorization server, configured for
     // MCP: binds tokens to MCP_RESOURCE, serves RFC 9728 protected-resource
     // metadata, and protects /mcp via requireMcpAuth (see index.ts).

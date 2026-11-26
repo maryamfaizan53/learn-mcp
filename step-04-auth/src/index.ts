@@ -1,7 +1,12 @@
+import { env } from "cloudflare:workers";
 import { McpServer, ResourceNotFoundError, ResourceTemplate } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
+import { auth } from "./auth";
 import { createNote, deleteNote, getNote, listNotes } from "./notes";
+import { getIdentity, identityStorage } from "./identity";
+import { consentPage, loginPage } from "./pages";
 
 const NOTE_ID_DESCRIPTION = "The note's id, as returned by list_notes or create_note.";
 
@@ -143,6 +148,44 @@ function createServer(): McpServer {
     },
   );
 
+  server.registerTool(
+    "list_company_members",
+    {
+      description:
+        "List every member of your company and their role. Admins only - a non-admin gets a clear error.",
+      outputSchema: z.object({
+        members: z.array(z.object({ userId: z.string(), email: z.string(), role: z.string() })),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const { orgId, role } = getIdentity();
+      if (role !== "admin") {
+        return {
+          content: [
+            { type: "text", text: "You must be an admin of this company to list its members." },
+          ],
+          isError: true,
+        };
+      }
+      const { results } = await env.DB.prepare(
+        "select member.userId as userId, user.email as email, member.role as role " +
+          "from member join user on user.id = member.userId where member.organizationId = ?",
+      )
+        .bind(orgId)
+        .all<{ userId: string; email: string; role: string }>();
+      return {
+        content: [
+          {
+            type: "text",
+            text: results.map((m) => `${m.email} (${m.role})`).join("\n"),
+          },
+        ],
+        structuredContent: { members: results },
+      };
+    },
+  );
+
   const noteResourceTemplate = new ResourceTemplate("note://{id}", {
     list: async () => ({
       resources: (await listNotes()).map((note) => ({
@@ -204,8 +247,51 @@ function createServer(): McpServer {
 // request and serves that instance over Streamable HTTP at /mcp.
 const handler = createMcpHandler(createServer);
 
+function jsonRpcError(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message } }),
+    { status, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 export default {
-  fetch(request, env, ctx) {
-    return handler(request, env, ctx);
+  async fetch(request, _env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/login") {
+      return loginPage(url.search.slice(1));
+    }
+    if (url.pathname === "/consent") {
+      return consentPage(url.searchParams);
+    }
+
+    if (url.pathname === "/mcp") {
+      const protectedMcp = requireMcpAuth(auth, async (req, claims) => {
+        const userId = typeof claims.sub === "string" ? claims.sub : undefined;
+        const orgId = typeof claims.orgId === "string" ? claims.orgId : undefined;
+        if (!userId || !orgId) {
+          return jsonRpcError(403, "This token has no company. Sign in again to get one.");
+        }
+        // Looked up fresh on every request, never cached and never baked
+        // into the token, so a role change or removal takes effect on the
+        // very next call.
+        const member = await env.DB.prepare(
+          "select role from member where organizationId = ? and userId = ?",
+        )
+          .bind(orgId, userId)
+          .first<{ role: string }>();
+        if (!member) {
+          return jsonRpcError(403, "You are no longer a member of this company.");
+        }
+        return identityStorage.run({ userId, orgId, role: member.role }, () =>
+          handler(req as Parameters<typeof handler>[0], env, ctx),
+        );
+      });
+      return protectedMcp(request);
+    }
+
+    // Everything else (sign-in, sign-up, the OAuth authorize/token/consent
+    // endpoints, discovery metadata) is Better Auth's own surface.
+    return auth.handler(request);
   },
 } satisfies ExportedHandler;
