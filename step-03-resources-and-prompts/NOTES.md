@@ -73,11 +73,30 @@ step-3 one.
 
 ## Testing targets today
 
-- **Claude (claude.ai / Claude Desktop):** resources and prompts both show up and work as expected
-  — attaching a `note://` resource and running `/summarize_notes` both tested successfully.
-- **ChatGPT (developer mode):** [fill in after testing — see the submission checklist below for
-  what "or your NOTES.md records how ChatGPT shows resources and prompts today" means if it
-  doesn't support one of these the same way.]
+Deployed at `https://learn-mcp-step-03.maryamfaizan-mcp.workers.dev/mcp` and verified three ways:
+raw `curl` against the live server (protocol-level correctness: `resources/list`, `resources/read`
+including the `ResourceNotFoundError` path, `prompts/list`, `prompts/get` with and without `tag`
+all behave exactly as designed), and two real clients:
+
+- **Tools — work everywhere tested.** `create_note`/`get_note`/`list_notes`/`delete_note` all work
+  through claude.ai's connector UI and in ChatGPT developer mode. Both show a visible tool-call
+  card before the reply.
+- **Resources — work in Claude, but not through the chat UI.** claude.ai's connector *settings*
+  page only lists tools, and the chat compose box has no resource-attach picker today. Claude
+  Code's own harness, though, has a generic MCP resource mechanism outside any one server's own
+  UI (`ListMcpResourcesTool`/`ReadMcpResourceTool`), and that successfully listed the `note://`
+  resource and read its content back correctly. So the server's resource support is confirmed
+  working; which surface shows it depends entirely on the client, not on this server.
+- **Prompts — correct on the server, no client UI found yet.** Neither claude.ai's chat box (no
+  `/` slash-menu entry for `summarize_notes`) nor Claude Code's harness (no generic "list/get MCP
+  prompts" tool exists there either) surfaces this primitive right now. This matches this step's
+  own `README.md`: prompts are the least-supported MCP primitive across clients today, which is
+  exactly the gap step 10's skills-over-MCP are meant to close. Proven correct instead via the MCP
+  Inspector and direct `curl` calls against the deployed server (see the Inspector output / raw
+  JSON responses captured during development).
+- **ChatGPT (developer mode):** tools confirmed working the same way as Claude. No resource-attach
+  or prompt slash-menu was found in this pass either — treated the same as Claude's gap above,
+  not as a server defect.
 
 ## Run, test, deploy
 
