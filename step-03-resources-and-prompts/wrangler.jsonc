@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "learn-mcp-step-03",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-25",
+  // agents/mcp/server uses AsyncLocalStorage, which Workers only exposes under nodejs_compat.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    // Step 3 gets its own namespace, separate from step 2's, so testing
+    // here never touches data from a step that's already been graded.
+    // Run `npx wrangler kv namespace create NOTES` and put the id it
+    // prints here before deploying.
+    { "binding": "NOTES", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
+  ]
+}
