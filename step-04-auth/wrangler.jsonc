@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "learn-mcp-step-04",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-25",
+  // agents/mcp/server uses AsyncLocalStorage, which Workers only exposes under nodejs_compat.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // Step 4 gets its own namespace, separate from earlier steps, so testing
+  // here never touches data from a step that's already been graded. Titles
+  // are account-wide on Cloudflare, so use a step-specific title (e.g.
+  // NOTES_STEP04) when running `npx wrangler kv namespace create`, but keep
+  // the binding itself NOTES to match what src/notes.ts reads from env.
+  "kv_namespaces": [{ "binding": "NOTES", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }]
+}
