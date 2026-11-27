@@ -261,7 +261,10 @@ export default {
     if (url.pathname === "/debug-fetch-test") {
       const target = url.searchParams.get("url") ?? "https://chatgpt.com/oauth/client.json";
       try {
-        const r = await fetch(target);
+        const r = await fetch(target, {
+          headers: { Accept: "application/json" },
+          redirect: "manual",
+        });
         const text = await r.text();
         return new Response(
           JSON.stringify({
