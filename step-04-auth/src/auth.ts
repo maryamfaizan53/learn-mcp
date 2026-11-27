@@ -46,8 +46,15 @@ function buildAuth() {
   // A Client ID Metadata Document is just the client's own metadata, served
   // by the client itself at an HTTPS URL that doubles as its client_id. cimd()
   // wants the same signature as the global `fetch` and does its own parsing
-  // and spec validation on the Response - we don't need to do either.
-  const fetchClientMetadataResource = fetch;
+  // and spec validation on the Response - we don't need to do either. Wrapped
+  // in an arrow function rather than passed as the bare `fetch` reference:
+  // confirmed by testing that a plain fetch() to a real client's metadata URL
+  // (e.g. ChatGPT's) succeeds immediately on its own, but cimd() reported
+  // "Failed to fetch metadata document" every time with the bare reference -
+  // workerd's fetch implementation needs the proper call-site context that a
+  // detached function value loses once cimd() invokes it as its own callback.
+  const fetchClientMetadataResource = (input: RequestInfo | URL, init?: RequestInit) =>
+    fetch(input, init);
 
   const auth = betterAuth({
     // Without this, Better Auth tries to derive the base URL from the
