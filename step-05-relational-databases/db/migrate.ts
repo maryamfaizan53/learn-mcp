@@ -25,12 +25,23 @@ if (!databaseUrl) {
 const sql = neon(databaseUrl);
 
 // Splitting a migration file into individual statements on top-level `;`
-// is a simplification: it would break on a dollar-quoted function body or
-// a string literal containing a semicolon. None of this course's
+// is a simplification: it would still break on a dollar-quoted function
+// body or a string literal containing a semicolon. None of this course's
 // migrations need either, so it's not worth a real SQL parser here - but
-// it's the reason to keep migrations to plain DDL and simple DML.
+// it's the reason to keep migrations to plain DDL and simple DML. Line
+// comments are stripped first, though, since a semicolon inside one
+// (explaining *why* a statement does something) is fair game and
+// shouldn't fracture the statement after it.
 function splitStatements(sqlText: string): string[] {
-  return sqlText
+  const withoutLineComments = sqlText
+    .split("\n")
+    .map((line) => {
+      const commentStart = line.indexOf("--");
+      return commentStart === -1 ? line : line.slice(0, commentStart);
+    })
+    .join("\n");
+
+  return withoutLineComments
     .split(";")
     .map((statement) => statement.trim())
     .filter((statement) => statement.length > 0);
