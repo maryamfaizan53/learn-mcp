@@ -26,6 +26,22 @@ Auth stays in D1 (shared with step 4, unchanged).
   query "..."`), and a script that copies the demo company's data into
   your own signed-in company by matching on name/email, never by reusing
   a demo-company id (ids aren't shared across companies).
+- **Sharing D1 with step 4 needs the same `BETTER_AUTH_SECRET`, not just
+  the same database.** Discovered the hard way: step 5's Worker got its
+  own freshly generated secret, and every OAuth sign-in from Claude/
+  ChatGPT failed with `BetterAuthError: Failed to decrypt private key`.
+  Better Auth's `jwt()` plugin stores its signing key *encrypted* in the
+  shared database, under whichever secret was active when step 4 first
+  created it - a different Worker reading that same database with a
+  different secret simply can't decrypt it. Fixed by setting the exact
+  same `BETTER_AUTH_SECRET` on both `learn-mcp-step-04` and
+  `learn-mcp-step-05` (`wrangler secret put ... --name <worker>` targets a
+  Worker without `cd`-ing into its folder) and clearing the one already-
+  encrypted key (`delete from jwks`) so it regenerates under the shared
+  secret. Redeploying both Workers afterwards mattered too - our own
+  `getAuth()`/`getSql()` lazy-singleton pattern (see step 4's NOTES.md)
+  caches per isolate, so a warm isolate from before the secret change
+  kept signing under the old one until a fresh deploy recycled it.
 - **Tenant scoping**: every table in the final schema carries `org_id` in
   its primary key *and* every foreign key (book lesson 19.7), so no row
   can ever reference another company's row, even by mistake.
@@ -163,10 +179,23 @@ erDiagram
     PRODUCTS ||--o{ ORDER_ITEMS : "sold as"
 ```
 
+## Deployment and cross-client testing
+
+Deployed and verified in both Claude and ChatGPT. Confirmed working:
+`describe_schema` returns the real catalog-sourced structure (not a
+hardcoded description), and `answer_business_question("best_customers")`
+returns the correctly tenant-scoped data for the signed-in company (James
+Okafor as top customer, matching the seeded demo dataset exactly) - not
+the demo company's data and not another company's.
+
+Note for anyone following these notes: `npm run seed -- <org-id>` run
+from a learner's own machine is the documented path, but it's also safe
+to run the same five INSERT statements directly against Neon (through
+the official Neon MCP connector, or the SQL Editor in the Neon console)
+if the script's local run doesn't take for some reason - it's just plain
+SQL, nothing Worker-specific.
+
 ## Not yet done
 
-- The three read-only tools (`describe_schema`, `answer_business_question`,
-  `compare_designs`) — next.
-- Deploy and cross-client testing (Claude, ChatGPT).
-- Confirming the seed script's output matches the demo company's counts
-  for the signed-in account used for testing.
+- SSO (the step's optional last prompt, carried over as optional from
+  step 4) - not attempted.
