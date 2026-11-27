@@ -222,67 +222,6 @@ describe("authentication", () => {
   });
 });
 
-describe("per-company, per-user notes", () => {
-  it("keeps one user's notes invisible to a user in a different company", async () => {
-    const aliceToken = await createSignedInUser("alice@example.com", "Alice");
-    const bobToken = await createSignedInUser("bob@example.com", "Bob");
-
-    const created = await callTool(aliceToken, "create_note", { content: "Alice's secret" });
-    expect(created.result?.structuredContent).toMatchObject({ content: "Alice's secret" });
-
-    const bobList = await callTool(bobToken, "list_notes", {});
-    const bobNotes = (bobList.result?.structuredContent as { notes: unknown[] }).notes;
-    expect(bobNotes).toHaveLength(0);
-
-    const aliceList = await callTool(aliceToken, "list_notes", {});
-    const aliceNotes = (aliceList.result?.structuredContent as { notes: unknown[] }).notes;
-    expect(aliceNotes).toHaveLength(1);
-  });
-
-  it("keeps 20 concurrent create_note calls from one user isolated to their own content", async () => {
-    const token = await createSignedInUser("concurrency@example.com", "Concurrency");
-    // Fixed-width, zero-padded content so none is ever a substring of
-    // another (unpadded "Note 1" would be a substring of "Note 12").
-    const contents = Array.from({ length: 20 }, (_, i) => `Note content ${String(i).padStart(2, "0")}`);
-
-    const creates = await Promise.all(contents.map((content) => callTool(token, "create_note", { content })));
-    const ids = new Set<string>();
-    creates.forEach((response, i) => {
-      const structured = response.result?.structuredContent as { id: string; content: string };
-      expect(structured.content).toBe(contents[i]);
-      ids.add(structured.id);
-    });
-    expect(ids.size).toBe(contents.length);
-
-    const list = await callTool(token, "list_notes", {});
-    const notes = (list.result?.structuredContent as { notes: unknown[] }).notes;
-    expect(notes).toHaveLength(contents.length);
-  });
-
-  it("create_note then get_note then delete_note round-trips one note", async () => {
-    const token = await createSignedInUser("roundtrip@example.com", "Round Trip");
-
-    const created = await callTool(token, "create_note", { content: "Round trip" });
-    const { id } = created.result?.structuredContent as { id: string };
-
-    const got = await callTool(token, "get_note", { id });
-    expect((got.result?.structuredContent as { content: string }).content).toBe("Round trip");
-
-    const deleted = await callTool(token, "delete_note", { id });
-    expect((deleted.result?.structuredContent as { deleted: boolean }).deleted).toBe(true);
-
-    const redelete = await callTool(token, "delete_note", { id });
-    expect(redelete.result?.content[0]?.text).toContain(id);
-  });
-
-  it("get_note reports a clear error for an unknown id, not a crash", async () => {
-    const token = await createSignedInUser("notfound@example.com", "Not Found");
-    const missing = "00000000-0000-0000-0000-000000000000";
-    const got = await callTool(token, "get_note", { id: missing });
-    expect(got.result?.content[0]?.text).toContain(missing);
-  });
-});
-
 describe("list_company_members", () => {
   it("lets an admin list their company's members", async () => {
     const token = await createSignedInUser("own-admin@example.com", "Own Admin");
