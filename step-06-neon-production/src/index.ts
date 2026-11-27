@@ -14,6 +14,7 @@ import {
   compareDesigns,
   describeSchema,
 } from "./sales";
+import { SUMMARY_GROUP_BY, getSalesSummary, listOrders } from "./orders";
 
 const ROW_SCHEMA = z.record(z.string(), z.unknown());
 
@@ -162,6 +163,87 @@ function createServer(): McpServer {
           },
         ],
         structuredContent: { question, flat, normalized, note },
+      };
+    },
+  );
+
+  server.registerTool(
+    "list_orders",
+    {
+      description:
+        "List your company's orders, newest-filtered-first by order id, with optional filters (date " +
+        "range, customer name, product name) and cursor pagination. Each row is one order's summary " +
+        "(customer, item count, total) - call get_order_details-style questions through " +
+        "answer_business_question for deeper analysis, not this tool. Pass the previous call's " +
+        "nextCursor to get the next page; a null nextCursor means there are no more.",
+      inputSchema: {
+        fromDate: z.iso.date().optional().describe("Only orders on or after this date (YYYY-MM-DD)."),
+        toDate: z.iso.date().optional().describe("Only orders on or before this date (YYYY-MM-DD)."),
+        customerName: z.string().min(1).optional().describe("Only orders for customers whose name contains this text."),
+        productName: z.string().min(1).optional().describe("Only orders containing a product whose name contains this text."),
+        cursor: z.string().optional().describe("Pass the nextCursor from a previous call to get the next page."),
+        limit: z.number().int().min(1).max(50).default(20).describe("Page size, 1 to 50."),
+      },
+      outputSchema: z.object({
+        orders: z.array(
+          z.object({
+            orderId: z.string(),
+            orderDate: z.string(),
+            customerName: z.string(),
+            itemCount: z.number(),
+            orderTotal: z.string(),
+          }),
+        ),
+        nextCursor: z.string().nullable(),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ fromDate, toDate, customerName, productName, cursor, limit }) => {
+      const { orgId } = getIdentity();
+      const result = await withClient((client) =>
+        listOrders(client, { orgId, fromDate, toDate, customerName, productName, cursor, limit }),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              result.orders.length === 0
+                ? "No orders match."
+                : result.orders
+                    .map((o) => `${o.orderId}: ${o.orderDate} - ${o.customerName} - ${o.itemCount} items - ${o.orderTotal}`)
+                    .join("\n"),
+          },
+        ],
+        structuredContent: result,
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_sales_summary",
+    {
+      description:
+        "Totals for your company's sales, grouped by month, product or customer. Use this for a quick " +
+        "summary; use answer_business_question for one of the other named questions (averages, " +
+        "largest order, revenue by city or category).",
+      inputSchema: {
+        groupBy: z.enum(SUMMARY_GROUP_BY).describe("How to group the totals."),
+      },
+      outputSchema: z.object({ groupBy: z.string(), rows: z.array(ROW_SCHEMA) }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ groupBy }) => {
+      const { orgId } = getIdentity();
+      const rows = await withClient((client) => getSalesSummary(client, groupBy, orgId));
+      return {
+        content: [
+          {
+            type: "text",
+            text: rows.length === 0 ? "No data yet." : JSON.stringify(rows, null, 2),
+          },
+        ],
+        structuredContent: { groupBy, rows },
       };
     },
   );
