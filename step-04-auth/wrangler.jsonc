@@ -34,6 +34,9 @@
   "vars": {
     "MCP_BASE_URL": "https://learn-mcp-step-04.maryamfaizan-mcp.workers.dev"
   },
+  // BETTER_AUTH_SECRET is NOT listed here - "vars" is committed to git.
+  // It's a secret: set it locally in .dev.vars and in production with
+  // `wrangler secret put BETTER_AUTH_SECRET` (see src/auth.ts).
   // @modelcontextprotocol/server imports zod via the "zod/v4" subpath,
   // while better-auth's packages import plain "zod" - both resolve to the
   // same underlying file, but as two different wrapper modules, which

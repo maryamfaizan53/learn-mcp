@@ -12,8 +12,32 @@ declare global {
     interface Env {
       DB: D1Database;
       MCP_BASE_URL: string;
+      BETTER_AUTH_SECRET: string;
     }
   }
+}
+
+// Security review finding: without an explicit `secret`, Better Auth signs
+// session/OAuth-state cookies - and encrypts the JWKS private key it stores
+// in D1 for signing MCP access tokens - with a hardcoded fallback
+// ("better-auth-secret-12345678901234567890", baked into the package and
+// the same for every Better Auth deployment on earth) whenever
+// BETTER_AUTH_SECRET isn't set. Better Auth only refuses to start on that
+// fallback when `NODE_ENV === "production"`, which Workers never sets, so
+// this was silently in effect on the real deployed server. Set with
+// `wrangler secret put BETTER_AUTH_SECRET` (generate one locally first,
+// e.g. `openssl rand -base64 32` - never type a real secret into a chat).
+// `npx auth generate`/`migrate` read auth.cli.ts instead, which never
+// serves real traffic, so no placeholder-detection dance is needed here.
+function getBetterAuthSecret(): string {
+  const secret = env.BETTER_AUTH_SECRET;
+  if (!secret || secret.startsWith("env.")) {
+    throw new Error(
+      "BETTER_AUTH_SECRET is not set. Run `wrangler secret put BETTER_AUTH_SECRET` " +
+        "with a value from `openssl rand -base64 32` (or similar) before deploying.",
+    );
+  }
+  return secret;
 }
 
 // The URL clients connect to. Tokens are bound to this exact resource
@@ -57,6 +81,11 @@ function buildAuth() {
     // incoming request, which doesn't exist yet during `auth generate` and
     // isn't reliable enough for OAuth callbacks/redirects anyway.
     baseURL: MCP_BASE_URL,
+    // Signs session/OAuth-state cookies and encrypts the JWKS private key
+    // at rest in D1. See getBetterAuthSecret()'s comment above - without
+    // this, Better Auth silently falls back to a fixed, publicly known
+    // default on Workers.
+    secret: getBetterAuthSecret(),
     // Better Auth's own data (users, sessions, OAuth clients) lives in D1 -
     // never in the same KV namespace as the notes. See wrangler.jsonc's
     // d1_databases entry. Wrapped in a Kysely dialect (rather than passed as

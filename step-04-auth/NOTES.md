@@ -121,5 +121,70 @@ forget to swap it back before deploying again.
   inconsistency, not a bug in this server — ChatGPT was used as the proof of
   concept instead. Worth retrying later or asking Anthropic support.
 - SSO (the step's optional last prompt) — not attempted.
-- Security review (the step's prompt 8: token validation, redirect URIs,
-  secret handling, CORS) — not done yet.
+
+## Security review
+
+Reviewed by reading the actual shipped code in `node_modules` for
+`better-auth`, `@better-auth/mcp`, `@better-auth/oauth-provider` and
+`@better-auth/cimd` (not just their docs), against the four areas the step
+asks for: token validation, redirect URIs, secret handling, CORS.
+
+### Found and fixed: missing `BETTER_AUTH_SECRET` (severe)
+
+Without an explicit `secret` passed to `betterAuth()`, the library signs
+session and OAuth-state cookies — and encrypts the JWKS private key it
+stores in D1 for signing this server's own MCP access tokens — with a
+hardcoded fallback value, `"better-auth-secret-12345678901234567890"`,
+baked into the package and identical for every Better Auth deployment that
+doesn't set one.
+
+Better Auth does refuse to start on that fallback, but only when
+`NODE_ENV === "production"` (`@better-auth/core/env`'s `isProduction`). A
+Cloudflare Worker never sets `NODE_ENV` unless a step explicitly adds it as
+a `vars` entry, which this one didn't — so the safety check silently never
+fired, and the real deployed server was signing cookies and encrypting its
+signing key with a secret anyone can read out of the `better-auth` npm
+package. That's a session-forgery and signing-key-compromise risk, not a
+theoretical one.
+
+Fixed in `src/auth.ts`: `getBetterAuthSecret()` reads `env.BETTER_AUTH_SECRET`
+and throws a clear error on first request if it's missing, instead of
+falling through to the library default. `secret: getBetterAuthSecret()` is
+now passed explicitly to `betterAuth()`. `wrangler.jsonc` documents (in a
+comment, not a value — it's a secret) that it must be set with
+`wrangler secret put BETTER_AUTH_SECRET` in production and in `.dev.vars`
+locally; `.dev.vars.example` was also stale (still said "no secrets needed,"
+left over from the step-1 copy prompt) and now shows the real variable
+name with instructions to generate one via `openssl rand -base64 32`.
+
+### Checked, no gap found
+
+- **Token validation.** `requireMcpAuth()` verifies every access token's
+  signature against the server's own JWKS, and — because `index.ts` passes
+  `{ resource: getMcpResource() }` explicitly — rejects any token not bound
+  to this exact `/mcp` resource (RFC 8707). `index.ts` then re-derives the
+  caller's company and role from D1 by the verified `sub` on every single
+  request; nothing about identity is cached or trusted from the token's
+  other claims or from any tool argument.
+- **Redirect URIs.** `@better-auth/oauth-provider`'s authorize endpoint only
+  resolves a `redirect_uri` that's in the connecting client's own registered
+  list (`resolveTrustedRedirectUri` → `findRegisteredRedirectUri`), and the
+  token endpoint re-checks the exact same `redirect_uri` was supplied again
+  at the code exchange (`checkVerificationValue`), rejecting any mismatch
+  with `invalid_grant`. This is enforced by the library on every flow,
+  including the CIMD one our tests and the ChatGPT connection both exercise.
+- **CORS.** `/mcp` serves `Access-Control-Allow-Origin: *` by default (from
+  `agents/mcp/server`'s `createMcpHandler`). That's intentional, not a gap —
+  this endpoint is protected by a bearer token a caller must supply
+  explicitly, never an ambient credential like a cookie that a browser would
+  attach automatically, so a wildcard origin doesn't expose anything to a
+  malicious page. Better Auth's own `/api/auth/*` routes, and our hand-rolled
+  `/login`/`/consent` pages, emit no `Access-Control-Allow-Origin` header at
+  all, so a cross-origin page can't read their responses either way; the
+  whole sign-in/consent flow only ever makes same-origin requests by design.
+- **Secret-adjacent code review.** `/login`'s and `/consent`'s HTML templates
+  escape every value taken from the query string (`escapeHtml`) or pass it
+  through `JSON.stringify`/`encodeURIComponent` before embedding it in a
+  script or URL — no reflected-XSS path found. The one D1 query keyed by
+  caller input (`list_company_members`) uses a parameterized `.bind()` call,
+  not string interpolation.
