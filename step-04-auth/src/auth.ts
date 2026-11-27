@@ -53,8 +53,16 @@ function buildAuth() {
   // "Failed to fetch metadata document" every time with the bare reference -
   // workerd's fetch implementation needs the proper call-site context that a
   // detached function value loses once cimd() invokes it as its own callback.
-  const fetchClientMetadataResource = (input: RequestInfo | URL, init?: RequestInit) =>
-    fetch(input, init);
+  const fetchClientMetadataResource = async (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      const response = await fetch(input, init);
+      console.error("CIMD_FETCH_OK", String(input), response.status, response.redirected);
+      return response;
+    } catch (error) {
+      console.error("CIMD_FETCH_THREW", String(input), error instanceof Error ? error.stack ?? error.message : String(error));
+      throw error;
+    }
+  };
 
   const auth = betterAuth({
     // Without this, Better Auth tries to derive the base URL from the
