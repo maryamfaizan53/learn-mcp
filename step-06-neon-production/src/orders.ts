@@ -53,7 +53,7 @@ export async function listOrders(client: Client, filters: OrderListFilters): Pro
   }>(
     `select
        o.order_id,
-       o.order_date,
+       to_char(o.order_date, 'YYYY-MM-DD') as order_date,
        c.name as customer_name,
        count(oi.line_no) as item_count,
        sum(oi.quantity * oi.unit_price) as order_total
