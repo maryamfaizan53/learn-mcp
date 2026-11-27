@@ -6,6 +6,15 @@ import { z } from "zod";
 import { getAuth, getMcpResource } from "./auth";
 import { getIdentity, identityStorage } from "./identity";
 import { consentPage, loginPage } from "./pages";
+import {
+  BUSINESS_QUESTIONS,
+  COMPARE_QUESTIONS,
+  answerBusinessQuestion,
+  compareDesigns,
+  describeSchema,
+} from "./sales";
+
+const ROW_SCHEMA = z.record(z.string(), z.unknown());
 
 // Called once per request by createMcpHandler, never reused across requests:
 // nothing about one caller's request may leak into another's through this
@@ -52,6 +61,106 @@ function createServer(): McpServer {
           },
         ],
         structuredContent: { members: results },
+      };
+    },
+  );
+
+  server.registerTool(
+    "describe_schema",
+    {
+      description:
+        "Describe every table in the business database: its schema (staging or public), columns with " +
+        "their types and nullability, and primary key. Call this before answer_business_question or " +
+        "compare_designs if you need to explain the design, not just query it. Read directly from " +
+        "Postgres's own catalog, so it's always accurate - never hand-maintained.",
+      outputSchema: z.object({
+        tables: z.array(
+          z.object({
+            schema: z.string(),
+            name: z.string(),
+            columns: z.array(z.object({ name: z.string(), type: z.string(), nullable: z.boolean() })),
+            primaryKey: z.array(z.string()),
+          }),
+        ),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const tables = await describeSchema();
+      return {
+        content: [
+          {
+            type: "text",
+            text: tables
+              .map((t) => `${t.schema}.${t.name} (${t.columns.length} columns, key: ${t.primaryKey.join(", ")})`)
+              .join("\n"),
+          },
+        ],
+        structuredContent: { tables },
+      };
+    },
+  );
+
+  server.registerTool(
+    "answer_business_question",
+    {
+      description:
+        "Answer one of ten named business questions (monthly revenue, top products, best customers, and " +
+        "so on) with a fixed, parameterized query scoped to your own signed-in company. Never runs " +
+        "arbitrary SQL - pick the question that's closest to what was asked, and explain the result in " +
+        "words, don't just dump the table.",
+      inputSchema: {
+        question: z.enum(BUSINESS_QUESTIONS).describe("Which named business question to answer."),
+      },
+      outputSchema: z.object({ question: z.string(), rows: z.array(ROW_SCHEMA) }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ question }) => {
+      const { orgId } = getIdentity();
+      const rows = await answerBusinessQuestion(question, orgId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: rows.length === 0 ? "No data for this question yet." : JSON.stringify(rows, null, 2),
+          },
+        ],
+        structuredContent: { question, rows },
+      };
+    },
+  );
+
+  server.registerTool(
+    "compare_designs",
+    {
+      description:
+        "Run one business question against both the original flat spreadsheet design and the normalized " +
+        "design, using the same demo data for both, and explain the anomaly (if any) the flat design " +
+        "causes for that question. Use this when asked why normalizing matters, not to answer a real " +
+        "question about your own company's data - use answer_business_question for that.",
+      inputSchema: {
+        question: z.enum(COMPARE_QUESTIONS).describe("Which question to compare across both designs."),
+      },
+      outputSchema: z.object({
+        question: z.string(),
+        flat: z.array(ROW_SCHEMA),
+        normalized: z.array(ROW_SCHEMA),
+        note: z.string(),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ question }) => {
+      const { flat, normalized, note } = await compareDesigns(question);
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Flat design:\n${JSON.stringify(flat, null, 2)}\n\n` +
+              `Normalized design:\n${JSON.stringify(normalized, null, 2)}\n\n${note}`,
+          },
+        ],
+        structuredContent: { question, flat, normalized, note },
       };
     },
   );
