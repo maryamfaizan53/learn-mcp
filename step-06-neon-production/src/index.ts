@@ -14,7 +14,7 @@ import {
   compareDesigns,
   describeSchema,
 } from "./sales";
-import { SUMMARY_GROUP_BY, getSalesSummary, listOrders } from "./orders";
+import { OrderValidationError, SUMMARY_GROUP_BY, createOrder, getSalesSummary, listOrders } from "./orders";
 
 const ROW_SCHEMA = z.record(z.string(), z.unknown());
 
@@ -245,6 +245,73 @@ function createServer(): McpServer {
         ],
         structuredContent: { groupBy, rows },
       };
+    },
+  );
+
+  server.registerTool(
+    "create_order",
+    {
+      description:
+        "Record a new order for an existing customer in your company, with one or more line items. " +
+        "Looks up the customer and each product by name, copies the product's current catalog price " +
+        "into the order line (so a later price change never rewrites a past sale), and inserts the " +
+        "order and all its lines in one transaction - either the whole order is recorded, or none of " +
+        "it is. Fails with a clear error naming exactly which customer or product name didn't match, " +
+        "rather than guessing or creating a new one.",
+      inputSchema: {
+        customerName: z.string().min(1).describe("An existing customer's exact name."),
+        orderDate: z.iso.date().optional().describe("The order's date (YYYY-MM-DD). Defaults to today."),
+        items: z
+          .array(
+            z.object({
+              productName: z.string().min(1).describe("An existing product's exact name."),
+              quantity: z.number().int().min(1).describe("How many of this product, at least 1."),
+            }),
+          )
+          .min(1)
+          .describe("One or more line items. The same product listed twice becomes two separate lines."),
+      },
+      outputSchema: z.object({
+        orderId: z.string(),
+        orderDate: z.string(),
+        customerName: z.string(),
+        items: z.array(
+          z.object({
+            productName: z.string(),
+            quantity: z.number(),
+            unitPrice: z.string(),
+            lineTotal: z.string(),
+          }),
+        ),
+        orderTotal: z.string(),
+      }),
+    },
+    async ({ customerName, orderDate, items }) => {
+      const { orgId } = getIdentity();
+      try {
+        const order = await withClient((client) =>
+          createOrder(client, {
+            orgId,
+            customerName,
+            orderDate: orderDate ?? new Date().toISOString().slice(0, 10),
+            items,
+          }),
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Created order ${order.orderId} for ${order.customerName}: ${order.orderTotal} total.`,
+            },
+          ],
+          structuredContent: order,
+        };
+      } catch (error) {
+        if (error instanceof OrderValidationError) {
+          return { content: [{ type: "text", text: error.message }], isError: true };
+        }
+        throw error;
+      }
     },
   );
 
