@@ -258,33 +258,6 @@ export default {
   async fetch(request, _env, ctx) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/debug-fetch-test") {
-      const target = url.searchParams.get("url") ?? "https://chatgpt.com/oauth/client.json";
-      try {
-        const r = await fetch(target, {
-          headers: { Accept: "application/json" },
-          redirect: "manual",
-        });
-        const text = await r.text();
-        return new Response(
-          JSON.stringify({
-            ok: r.ok,
-            status: r.status,
-            redirected: r.redirected,
-            finalUrl: r.url,
-            contentType: r.headers.get("content-type"),
-            bodySnippet: text.slice(0, 300),
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        );
-      } catch (err) {
-        return new Response(
-          JSON.stringify({ caught: true, message: err instanceof Error ? err.message : String(err) }),
-          { status: 500, headers: { "Content-Type": "application/json" } },
-        );
-      }
-    }
-
     if (url.pathname === "/login") {
       return loginPage(url.search.slice(1));
     }
