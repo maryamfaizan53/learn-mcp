@@ -33,10 +33,25 @@
   "vars": {
     "MCP_BASE_URL": "http://localhost:8787"
   },
-  // BETTER_AUTH_SECRET and DATABASE_URL are NOT listed here - "vars" is
-  // committed to git. Both are secrets: set them locally in .dev.vars and
-  // in production with `wrangler secret put <NAME>` (see src/auth.ts and
-  // src/db.ts). DATABASE_URL is the Neon branch's pooled connection string.
+  // Hyperdrive pools and speeds up the connection to Neon from Workers.
+  // Created with `wrangler hyperdrive create learn-mcp-step-06
+  // --connection-string="<direct, non-pooled Neon connection string for
+  // the least-privilege learn_mcp_connector role>" --caching-disabled`.
+  // Query caching is off deliberately: a cache that doesn't know about
+  // the per-request tenant setting (set_config('app.tenant_id', ...),
+  // from step 6's row-level security) could hand one company another's
+  // cached rows (book lesson 19.9). The id below is public (it's not a
+  // secret - the actual Neon credentials live only on Cloudflare's side,
+  // configured once via the command above).
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "4152fd23ee234f44848fb7bb9b7506a0" }],
+  // BETTER_AUTH_SECRET is NOT listed here - "vars" is committed to git.
+  // It's a secret: set it locally in .dev.vars and in production with
+  // `wrangler secret put BETTER_AUTH_SECRET` (see src/auth.ts). For
+  // local `wrangler dev`, Hyperdrive is bypassed in favor of a direct
+  // connection to the step-06-dev branch, set with the
+  // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE variable in
+  // .dev.vars (Cloudflare's documented local-dev override for a
+  // Hyperdrive binding - never the production connection string).
   // @modelcontextprotocol/server imports zod via the "zod/v4" subpath,
   // while better-auth's packages import plain "zod" - both resolve to the
   // same underlying file, but as two different wrapper modules, which

@@ -4,6 +4,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
 import { getAuth, getMcpResource } from "./auth";
+import { withClient } from "./db";
 import { getIdentity, identityStorage } from "./identity";
 import { consentPage, loginPage } from "./pages";
 import {
@@ -86,7 +87,7 @@ function createServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const tables = await describeSchema();
+      const tables = await withClient((client) => describeSchema(client));
       return {
         content: [
           {
@@ -117,7 +118,7 @@ function createServer(): McpServer {
     },
     async ({ question }) => {
       const { orgId } = getIdentity();
-      const rows = await answerBusinessQuestion(question, orgId);
+      const rows = await withClient((client) => answerBusinessQuestion(client, question, orgId));
       return {
         content: [
           {
@@ -150,7 +151,7 @@ function createServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ question }) => {
-      const { flat, normalized, note } = await compareDesigns(question);
+      const { flat, normalized, note } = await withClient((client) => compareDesigns(client, question));
       return {
         content: [
           {

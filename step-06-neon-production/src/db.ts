@@ -1,42 +1,38 @@
 import { env } from "cloudflare:workers";
-import { neon } from "@neondatabase/serverless";
+import { Client } from "pg";
 
-// Matches wrangler.jsonc's comment: DATABASE_URL is a secret, never a
-// committed "vars" entry. Set it with `wrangler secret put DATABASE_URL`
-// in production and in .dev.vars locally.
 declare global {
   namespace Cloudflare {
     interface Env {
-      DATABASE_URL: string;
+      HYPERDRIVE: Hyperdrive;
     }
   }
 }
 
-// Neon's HTTP driver (`neon()`), not its WebSocket-based Pool/Client: every
-// query here is a single fetch(), which fits this step's read-only tools -
-// one query in, one result out, no connection to keep alive across a
-// request. Neon's own docs say WebSocket connections can't outlive a
-// single request on Workers and point to Cloudflare Hyperdrive instead
-// once you need that (writes, transactions, connection pooling) - which is
-// why this course introduces Hyperdrive at step 6, not here.
+// Hyperdrive proxies a real Postgres TCP connection, which is why this
+// step switches drivers from step 5's @neondatabase/serverless (an HTTP
+// driver - fast for one-shot queries, but not something Hyperdrive pools
+// or speeds up at all, since there's no TCP connection for it to pool).
+// `pg` (node-postgres) is Cloudflare's own documented driver for this.
 //
-// Built lazily and cached per isolate, same reasoning as auth.ts's
-// getAuth(): nothing here holds per-request state, so one instance per
-// Worker isolate is correct, and building it at module scope (before a
-// request exists to read env from) isn't reliable under workerd.
-let cachedSql: ReturnType<typeof neon> | undefined;
+// `env.HYPERDRIVE` is a binding Cloudflare injects, typed by
+// @cloudflare/workers-types - no local declaration needed, unlike
+// DATABASE_URL in step 5.
 
-export function getSql() {
-  if (!cachedSql) {
-    const databaseUrl = env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error(
-        "DATABASE_URL is not set. Run `wrangler secret put DATABASE_URL` " +
-          "(production) or add it to .dev.vars (local) with your Neon branch's " +
-          "pooled connection string.",
-      );
-    }
-    cachedSql = neon(databaseUrl);
+// One Client per request, connected, used and closed before the request
+// ends - never cached across requests. This matches both Neon's and
+// Cloudflare's guidance: a Worker isolate can outlive a single request,
+// but a raw TCP connection kept open across requests would eventually
+// get the isolate stuck holding a dead or reused socket. Hyperdrive is
+// what makes this affordable despite connecting fresh every time - the
+// expensive part (the real connection to Neon) is pooled on Cloudflare's
+// side, not reopened per request.
+export async function withClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+  const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
   }
-  return cachedSql;
 }

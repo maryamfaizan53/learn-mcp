@@ -5,7 +5,7 @@
 //
 // Usage: npm run query "select * from staging.flat_sales limit 5"
 import { existsSync } from "node:fs";
-import { neon } from "@neondatabase/serverless";
+import { Client } from "pg";
 
 if (existsSync(".dev.vars")) {
   process.loadEnvFile(".dev.vars");
@@ -23,18 +23,20 @@ if (!statement.trim()) {
   process.exit(1);
 }
 
-const sql = neon(databaseUrl);
+const client = new Client({ connectionString: databaseUrl });
 
-sql
-  .query(statement)
-  .then((rows) => {
-    if (Array.isArray(rows) && rows.length > 0) {
-      console.table(rows);
+client
+  .connect()
+  .then(() => client.query(statement))
+  .then((result) => {
+    if (result.rows.length > 0) {
+      console.table(result.rows);
     } else {
       console.log("(0 rows)");
     }
   })
   .catch((error) => {
     console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
-  });
+    process.exitCode = 1;
+  })
+  .finally(() => client.end());

@@ -2,10 +2,12 @@
 // hasn't already run against this database - once each, never twice.
 // Run from your own machine with `npm run migrate`, never from the Worker:
 // migrations are a one-time admin action, not something a deployed Worker
-// does on every request.
+// does on every request. Always run as the owner role (DATABASE_URL) -
+// the connector role the Worker uses (via Hyperdrive) can't change the
+// schema on purpose.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { neon } from "@neondatabase/serverless";
+import { Client } from "pg";
 
 // Node's built-in .env-file loader reads .dev.vars's KEY=VALUE lines
 // (dotenv-compatible format) straight into process.env. Optional: CI or a
@@ -21,8 +23,6 @@ if (!databaseUrl) {
   );
   process.exit(1);
 }
-
-const sql = neon(databaseUrl);
 
 // Splitting a migration file into individual statements on top-level `;`
 // is a simplification: it would still break on a dollar-quoted function
@@ -48,38 +48,51 @@ function splitStatements(sqlText: string): string[] {
 }
 
 async function main() {
-  await sql`
-    create table if not exists schema_migrations (
-      filename text primary key,
-      applied_at timestamptz not null default now()
-    )
-  `;
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await client.query(`
+      create table if not exists schema_migrations (
+        filename text primary key,
+        applied_at timestamptz not null default now()
+      )
+    `);
 
-  const migrationsDir = join(import.meta.dirname, "migrations");
-  const files = readdirSync(migrationsDir)
-    .filter((name) => name.endsWith(".sql"))
-    .sort();
+    const migrationsDir = join(import.meta.dirname, "migrations");
+    const files = readdirSync(migrationsDir)
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
 
-  const applied = await sql`select filename from schema_migrations`;
-  const alreadyApplied = new Set(applied.map((row) => (row as { filename: string }).filename));
+    const applied = await client.query<{ filename: string }>("select filename from schema_migrations");
+    const alreadyApplied = new Set(applied.rows.map((row) => row.filename));
 
-  for (const file of files) {
-    if (alreadyApplied.has(file)) {
-      console.log(`skip  ${file} (already applied)`);
-      continue;
+    for (const file of files) {
+      if (alreadyApplied.has(file)) {
+        console.log(`skip  ${file} (already applied)`);
+        continue;
+      }
+
+      const text = readFileSync(join(migrationsDir, file), "utf8");
+      const statements = splitStatements(text);
+
+      console.log(`apply ${file} (${statements.length} statement${statements.length === 1 ? "" : "s"})`);
+      await client.query("begin");
+      try {
+        for (const statement of statements) {
+          await client.query(statement);
+        }
+        await client.query("insert into schema_migrations (filename) values ($1)", [file]);
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      }
     }
 
-    const text = readFileSync(join(migrationsDir, file), "utf8");
-    const statements = splitStatements(text);
-
-    console.log(`apply ${file} (${statements.length} statement${statements.length === 1 ? "" : "s"})`);
-    await sql.transaction([
-      ...statements.map((statement) => sql.query(statement)),
-      sql`insert into schema_migrations (filename) values (${file})`,
-    ]);
+    console.log("Done.");
+  } finally {
+    await client.end();
   }
-
-  console.log("Done.");
 }
 
 main().catch((error) => {

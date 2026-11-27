@@ -1,4 +1,4 @@
-import { getSql } from "./db";
+import type { Client } from "pg";
 
 // Every question here is a fixed, reviewed SQL statement with one
 // parameter (the caller's org_id) - never SQL the model writes. Keeping
@@ -111,19 +111,20 @@ const QUESTION_SQL: Record<BusinessQuestion, string> = {
   `,
 };
 
-// @neondatabase/serverless's query() is generic over its arrayMode/
-// fullResults *options*, not over the row shape - there's no supported
-// way to tell it "rows look like T". The cast below is accurate, not a
-// guess: every row really does have exactly the columns each SQL
-// statement selects, since we wrote every one of them ourselves.
-async function queryRows<T>(text: string, params?: unknown[]): Promise<T[]> {
-  const sql = getSql();
-  const rows = await sql.query(text, params as any[] | undefined);
-  return rows as unknown as T[];
+// pg's QueryResultRow constraint just requires an object type, which
+// every row shape here already satisfies - the cast is for params only
+// (pg's types want a concrete tuple, not our generic unknown[]).
+async function queryRows<T extends Record<string, unknown>>(
+  client: Client,
+  text: string,
+  params?: unknown[],
+): Promise<T[]> {
+  const result = await client.query<T>(text, params as any[] | undefined);
+  return result.rows;
 }
 
-export async function answerBusinessQuestion(question: BusinessQuestion, orgId: string) {
-  return queryRows<Record<string, unknown>>(QUESTION_SQL[question], [orgId]);
+export async function answerBusinessQuestion(client: Client, question: BusinessQuestion, orgId: string) {
+  return queryRows<Record<string, unknown>>(client, QUESTION_SQL[question], [orgId]);
 }
 
 // Only the questions with a clean, direct equivalent on the ungoverned
@@ -195,11 +196,13 @@ const COMPARE_NOTES: Record<CompareQuestion, string> = {
     "it under one city, because customers.city can only hold a single value per customer.",
 };
 
-export async function compareDesigns(question: CompareQuestion) {
-  const [flat, normalized] = await Promise.all([
-    queryRows<Record<string, unknown>>(FLAT_SQL[question]),
-    queryRows<Record<string, unknown>>(QUESTION_SQL[question], [DEMO_ORG_ID]),
-  ]);
+export async function compareDesigns(client: Client, question: CompareQuestion) {
+  // Sequential, not Promise.all: a single pg Client processes one query
+  // at a time on one TCP connection anyway (node-postgres queues
+  // concurrent calls internally), so awaiting each in turn is no slower
+  // and reads more honestly.
+  const flat = await queryRows<Record<string, unknown>>(client, FLAT_SQL[question]);
+  const normalized = await queryRows<Record<string, unknown>>(client, QUESTION_SQL[question], [DEMO_ORG_ID]);
   return { flat, normalized, note: COMPARE_NOTES[question] };
 }
 
@@ -220,8 +223,9 @@ export interface TableInfo {
 // the table list here, so this tool never drifts out of sync with the
 // actual migrations. Every row describes structure (column names, types,
 // keys), never data, so there's nothing here to scope by company.
-export async function describeSchema(): Promise<TableInfo[]> {
+export async function describeSchema(client: Client): Promise<TableInfo[]> {
   const tables = await queryRows<{ table_schema: string; table_name: string }>(
+    client,
     `select table_schema, table_name
      from information_schema.tables
      where table_schema in ('public', 'staging') and table_type = 'BASE TABLE'
@@ -231,6 +235,7 @@ export async function describeSchema(): Promise<TableInfo[]> {
   const result: TableInfo[] = [];
   for (const { table_schema, table_name } of tables) {
     const columns = await queryRows<{ column_name: string; data_type: string; is_nullable: string }>(
+      client,
       `select column_name, data_type, is_nullable
        from information_schema.columns
        where table_schema = $1 and table_name = $2
@@ -238,6 +243,7 @@ export async function describeSchema(): Promise<TableInfo[]> {
       [table_schema, table_name],
     );
     const primaryKey = await queryRows<{ column_name: string }>(
+      client,
       `select kcu.column_name
        from information_schema.table_constraints tc
        join information_schema.key_column_usage kcu
