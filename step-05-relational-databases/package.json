@@ -8,7 +8,8 @@
     "test": "vitest run",
     "deploy": "wrangler deploy",
     "migrate": "tsx db/migrate.ts",
-    "query": "tsx db/query.ts"
+    "query": "tsx db/query.ts",
+    "seed": "tsx db/seed-my-company.ts"
   },
   "dependencies": {
     "@better-auth/cimd": "1.7.28",
