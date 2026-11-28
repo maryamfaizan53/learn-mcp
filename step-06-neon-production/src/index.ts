@@ -31,6 +31,35 @@ function createServer(): McpServer {
   });
 
   server.registerTool(
+    "debug_tenant_check",
+    {
+      description: "TEMPORARY diagnostic tool.",
+      outputSchema: z.object({
+        orgId: z.string(),
+        activeTenant: z.union([z.string(), z.null()]),
+        visibleOrders: z.number(),
+      }),
+    },
+    async () => {
+      const { orgId } = getIdentity();
+      const result = await forTenant(orgId, async (client) => {
+        const setting = await client.query<{ active_tenant: string | null }>(
+          "select current_setting('app.tenant_id', true) as active_tenant",
+        );
+        const orders = await client.query<{ count: string }>("select count(*) from orders");
+        return {
+          activeTenant: setting.rows[0]!.active_tenant,
+          visibleOrders: Number(orders.rows[0]!.count),
+        };
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify({ orgId, ...result }) }],
+        structuredContent: { orgId, ...result },
+      };
+    },
+  );
+
+  server.registerTool(
     "list_company_members",
     {
       description:
