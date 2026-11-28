@@ -49,6 +49,12 @@
   // on Cloudflare's side, configured once via the commands that created
   // them.
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "REPLACE_WITH_STEP07_SHARED_HYPERDRIVE_ID" }],
+  // Caches get_company_settings reads per company (tenantKey(ctx, "settings")),
+  // cleared on every update_company_settings write - never the other way
+  // round, so a stale read is at worst a few minutes old, never wrong after
+  // a write. Created with `wrangler kv namespace create
+  // learn-mcp-step-07-settings`. Not a secret.
+  "kv_namespaces": [{ "binding": "SETTINGS_CACHE", "id": "REPLACE_WITH_STEP07_SETTINGS_KV_ID" }],
   // BETTER_AUTH_SECRET is NOT listed here - "vars" is committed to git.
   // It's a secret: set it locally in .dev.vars and in production with
   // `wrangler secret put BETTER_AUTH_SECRET` (see src/auth.ts). For

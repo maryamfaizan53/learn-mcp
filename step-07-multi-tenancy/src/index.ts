@@ -4,9 +4,11 @@ import { createMcpHandler } from "agents/mcp/server";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
 import { getAuth, getMcpResource } from "./auth";
+import { readCompanySettings, writeCompanySettings } from "./company";
 import { forTenant, withSharedClient } from "./db";
 import { getTenantContext, tenantStorage } from "./identity";
 import { consentPage, loginPage } from "./pages";
+import { tenantKey } from "./tenant";
 import {
   BUSINESS_QUESTIONS,
   COMPARE_QUESTIONS,
@@ -17,6 +19,14 @@ import {
 } from "./sales";
 import { OrderValidationError, SUMMARY_GROUP_BY, createOrder, getSalesSummary, listOrders } from "./orders";
 import { resolveTier, type TenantContext } from "./tenant";
+
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      SETTINGS_CACHE: KVNamespace;
+    }
+  }
+}
 
 const ROW_SCHEMA = z.record(z.string(), z.unknown());
 
@@ -65,6 +75,234 @@ function createServer(): McpServer {
           },
         ],
         structuredContent: { members: results },
+      };
+    },
+  );
+
+  server.registerTool(
+    "list_my_companies",
+    {
+      description:
+        "List every company you belong to, and which one this connection is currently acting as. " +
+        "A connection speaks for exactly one company for its whole life - there is no switch-company " +
+        "tool, by design (AGENTS.md's multi-tenancy rule: the company comes only from the verified " +
+        "token, never from a tool argument). To act as a different company, disconnect and reconnect; " +
+        "which one you land on next is whichever your account's membership lookup resolves to.",
+      outputSchema: z.object({
+        companies: z.array(z.object({ orgId: z.string(), name: z.string(), role: z.string(), active: z.boolean() })),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const { orgId, userId } = getTenantContext();
+      const { results } = await env.DB.prepare(
+        "select organization.id as orgId, organization.name as name, member.role as role " +
+          "from member join organization on organization.id = member.organizationId " +
+          "where member.userId = ?",
+      )
+        .bind(userId)
+        .all<{ orgId: string; name: string; role: string }>();
+      const companies = results.map((c) => ({ ...c, active: c.orgId === orgId }));
+      return {
+        content: [
+          {
+            type: "text",
+            text: companies.map((c) => `${c.name} (${c.role})${c.active ? " - current" : ""}`).join("\n"),
+          },
+        ],
+        structuredContent: { companies },
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_company_settings",
+    {
+      description:
+        "Read your company's settings: currency, fiscal year start and the sales threshold used " +
+        "elsewhere in this server. Every company has settings, even if nobody has changed them yet - " +
+        "unconfigured ones just read back the defaults.",
+      outputSchema: z.object({
+        currency: z.string(),
+        fiscalYearStart: z.string(),
+        salesThreshold: z.string(),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const ctx = getTenantContext();
+      const cacheKey = tenantKey(ctx, "settings");
+      const cached = await env.SETTINGS_CACHE.get(cacheKey);
+      const settings = cached
+        ? (JSON.parse(cached) as Awaited<ReturnType<typeof readCompanySettings>>)
+        : await forTenant(ctx, async (client) => {
+            const fresh = await readCompanySettings(client, ctx.orgId);
+            await env.SETTINGS_CACHE.put(cacheKey, JSON.stringify(fresh), { expirationTtl: 300 });
+            return fresh;
+          });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Currency: ${settings.currency}, fiscal year starts ${settings.fiscalYearStart}, sales threshold ${settings.salesThreshold}.`,
+          },
+        ],
+        structuredContent: settings,
+      };
+    },
+  );
+
+  server.registerTool(
+    "update_company_settings",
+    {
+      description:
+        "Change your company's currency, fiscal year start or sales threshold. Admins only - a " +
+        "non-admin gets a clear error. Only the fields you pass are changed; the rest keep their " +
+        "current value.",
+      inputSchema: {
+        currency: z.string().length(3).optional().describe("ISO 4217 currency code, e.g. USD, EUR."),
+        fiscalYearStart: z.iso.date().optional().describe("The date (YYYY-MM-DD) the fiscal year starts."),
+        salesThreshold: z.number().min(0).optional().describe("Sales threshold used elsewhere in this server."),
+      },
+      outputSchema: z.object({
+        currency: z.string(),
+        fiscalYearStart: z.string(),
+        salesThreshold: z.string(),
+      }),
+    },
+    async ({ currency, fiscalYearStart, salesThreshold }) => {
+      const ctx = getTenantContext();
+      if (ctx.role !== "admin") {
+        return {
+          content: [{ type: "text", text: "You must be an admin of this company to change its settings." }],
+          isError: true,
+        };
+      }
+      const settings = await forTenant(ctx, (client) =>
+        writeCompanySettings(client, ctx.orgId, { currency, fiscalYearStart, salesThreshold }),
+      );
+      // Cleared, not refreshed in place - the next read repopulates it, so
+      // there's exactly one place settings are ever written into the cache.
+      await env.SETTINGS_CACHE.delete(tenantKey(ctx, "settings"));
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Updated: currency ${settings.currency}, fiscal year starts ${settings.fiscalYearStart}, sales threshold ${settings.salesThreshold}.`,
+          },
+        ],
+        structuredContent: settings,
+      };
+    },
+  );
+
+  server.registerTool(
+    "invite_member",
+    {
+      description:
+        "Add an existing user to your company by email, with a role of 'admin' or 'member'. Admins " +
+        "only. The person must already have signed in to this server at least once (so they have an " +
+        "account) - this doesn't create a new account for them, and it doesn't send an email.",
+      inputSchema: {
+        email: z.email().describe("The exact email address they signed in with."),
+        role: z.enum(["admin", "member"]).describe("The role to give them in your company."),
+      },
+      outputSchema: z.object({ userId: z.string(), email: z.string(), role: z.string() }),
+    },
+    async ({ email, role }) => {
+      const ctx = getTenantContext();
+      if (ctx.role !== "admin") {
+        return {
+          content: [{ type: "text", text: "You must be an admin of this company to invite a member." }],
+          isError: true,
+        };
+      }
+      const user = await env.DB.prepare("select id from user where email = ?")
+        .bind(email)
+        .first<{ id: string }>();
+      if (!user) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No account found for ${email}. They need to sign in to this server once before you can add them.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        // addMember is the one organization-plugin endpoint that doesn't
+        // require a Better Auth session (confirmed by reading its source -
+        // it only needs organizationId in the body, unlike removeMember
+        // below) - this server authenticates MCP requests with an OAuth
+        // bearer token, never a Better Auth session cookie, so any
+        // endpoint that insists on one isn't callable from here at all.
+        await getAuth().api.addMember({
+          body: { userId: user.id, role, organizationId: ctx.orgId },
+        });
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: error instanceof Error ? error.message : "Could not add that member." }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text", text: `Added ${email} to your company as ${role}.` }],
+        structuredContent: { userId: user.id, email, role },
+      };
+    },
+  );
+
+  server.registerTool(
+    "remove_member",
+    {
+      description:
+        "Remove a member from your company by email. Admins only, and you can't remove yourself. " +
+        "They lose access on their very next call - membership is re-checked against the database on " +
+        "every request, never cached.",
+      inputSchema: {
+        email: z.email().describe("The exact email address of the member to remove."),
+      },
+      outputSchema: z.object({ removed: z.boolean() }),
+    },
+    async ({ email }) => {
+      const ctx = getTenantContext();
+      if (ctx.role !== "admin") {
+        return {
+          content: [{ type: "text", text: "You must be an admin of this company to remove a member." }],
+          isError: true,
+        };
+      }
+      const target = await env.DB.prepare(
+        "select member.userId as userId, member.role as role from member " +
+          "join user on user.id = member.userId where user.email = ? and member.organizationId = ?",
+      )
+        .bind(email, ctx.orgId)
+        .first<{ userId: string; role: string }>();
+      if (!target) {
+        return {
+          content: [{ type: "text", text: `${email} is not a member of your company.` }],
+          isError: true,
+        };
+      }
+      if (target.userId === ctx.userId) {
+        return {
+          content: [{ type: "text", text: "You can't remove yourself. Have another admin do it." }],
+          isError: true,
+        };
+      }
+      // removeMember's own organization-plugin endpoint requires a real
+      // Better Auth session (requireHeaders + orgSessionMiddleware,
+      // confirmed by reading its source) - not available here, same reason
+      // addMember above was chosen over it. This server already did its
+      // own admin check above, same as the plugin endpoint would have.
+      await env.DB.prepare("delete from member where userId = ? and organizationId = ?")
+        .bind(target.userId, ctx.orgId)
+        .run();
+      return {
+        content: [{ type: "text", text: `Removed ${email} from your company.` }],
+        structuredContent: { removed: true },
       };
     },
   );
