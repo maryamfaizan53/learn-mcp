@@ -53,15 +53,15 @@
   // non-pooled connection string for learn_mcp_connector against
   // enterprise_acme>" --caching-disabled`.
   "hyperdrive": [
-    { "binding": "HYPERDRIVE", "id": "REPLACE_WITH_STEP07_SHARED_HYPERDRIVE_ID" },
-    { "binding": "HYPERDRIVE_ENTERPRISE", "id": "REPLACE_WITH_STEP07_ENTERPRISE_HYPERDRIVE_ID" }
+    { "binding": "HYPERDRIVE", "id": "6756ec2aa0184e239a13549b466108f8" },
+    { "binding": "HYPERDRIVE_ENTERPRISE", "id": "442090f7b49245c49f8b74d19320c09a" }
   ],
   // Caches get_company_settings reads per company (tenantKey(ctx, "settings")),
   // cleared on every update_company_settings write - never the other way
   // round, so a stale read is at worst a few minutes old, never wrong after
   // a write. Created with `wrangler kv namespace create
   // learn-mcp-step-07-settings`. Not a secret.
-  "kv_namespaces": [{ "binding": "SETTINGS_CACHE", "id": "REPLACE_WITH_STEP07_SETTINGS_KV_ID" }],
+  "kv_namespaces": [{ "binding": "SETTINGS_CACHE", "id": "8bc7a1796b6946b1b44522a272a281f1" }],
   // BETTER_AUTH_SECRET is NOT listed here - "vars" is committed to git.
   // It's a secret: set it locally in .dev.vars and in production with
   // `wrangler secret put BETTER_AUTH_SECRET` (see src/auth.ts). For
