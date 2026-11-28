@@ -1,0 +1,12 @@
+# Copy this file to .dev.vars (gitignored) and fill in real values for
+# local `wrangler dev` and `npm test`. In production, set each one with
+# `wrangler secret put <NAME>` instead - never put a real secret in
+# wrangler.jsonc's committed "vars".
+
+# Same value as steps 4 and 5 use (sharing the D1 auth database means
+# sharing this secret too). Generate one with: openssl rand -base64 32
+BETTER_AUTH_SECRET=replace-with-a-real-random-secret-at-least-32-chars
+
+# Your Neon branch's connection string (the owner role, neondb_owner),
+# used by db/migrate.ts, db/query.ts and db/seed-my-company.ts.
+DATABASE_URL=replace-with-your-neon-branch-connection-string
