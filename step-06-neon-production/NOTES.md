@@ -192,15 +192,40 @@ Two throwaway companies (`rls-test-company-a`/`-b`), seeded and torn
 down by the test itself, acting as company A through the same
 `forTenant()`/`createOrder()` every real tool call uses - the real
 tenant boundary, not a mock of it. Couldn't run this from the sandbox
-used to build it (raw Postgres TCP is blocked there), so it's
-unverified until run for real; the policy-level findings above were
-all confirmed independently, directly against the database.
+used to build it (raw Postgres TCP is blocked there) - run for real
+afterwards and all 6 passed.
+
+Two things found and fixed getting there, both `@cloudflare/vitest-
+plugin` quirks, not RLS bugs:
+
+- `pg`'s CommonJS `require()`s (its own and transitively, `pgpass`'s
+  and `split2`'s) aren't resolved by the plugin's default module
+  loader. Fixed per Cloudflare's own known-issues page: pre-bundle `pg`
+  via `test.deps.optimizer.ssr`. That alone wasn't quite enough - the
+  pre-bundle step then tried to resolve the long tail of Node builtins
+  `pg` touches (`tls`, `crypto`, `dns`, `fs`, ...) itself, outside the
+  Workers runtime that actually supplies them via `nodejs_compat`, and
+  failed on each one in turn. Excluding the whole `node:module`
+  `builtinModules` list from the pre-bundle step fixed it completely.
+
+## Confirmed working in production, end to end
+
+`describe_schema`, `answer_business_question`, `list_orders` (paging
+and the product-name filter both correct), `get_sales_summary`, and
+`create_order` (order #73 - James Okafor, 2× Desk Lamp at the current
+catalog price - verified both in the tool's own response and directly
+against the database afterward) - all tested for real through a live
+client, not just locally.
+
+One real debugging detour along the way, worth recording: a
+`debug_tenant_check` tool (since removed) showed `forTenant()` and row-
+level security were correct the whole time - `activeTenant` matched
+the real `orgId` and all 36 real orders were visible - when an earlier
+test through a different client connection showed zero. The cause was
+the same stale-connector-tool-list problem hit repeatedly in steps 5
+and 6, not a server bug: reconnecting the connector fixed it, same as
+every previous time.
 
 ## Not yet done
 
-- Final cross-client deploy verification for `create_order` (blocked
-  earlier by a stale connector tool-list in Claude - the server side is
-  confirmed correct, this just needs a clean retry) and for the new
-  `test/row-level-security.test.ts` (needs running somewhere with real
-  Postgres network access).
 - SSO (carried over as optional from steps 4-5) - not attempted.
