@@ -152,72 +152,66 @@ export interface CreatedOrder {
 // clear, recoverable tool error instead of a crash.
 export class OrderValidationError extends Error {}
 
-// Runs the whole order as one transaction: either every row is inserted
-// - the order header and every line - or none are. A customer typo or
-// an unknown product must never leave a half-created order behind.
+// Transaction boundaries are owned by db.ts's forTenant(), which also
+// sets the tenant this transaction runs under - not here. Either every
+// row is inserted - the order header and every line - or none are: a
+// customer typo or an unknown product rolls the whole call back, since
+// forTenant() rolls back on any error this function throws.
 export async function createOrder(client: Client, input: NewOrderInput): Promise<CreatedOrder> {
-  await client.query("begin");
-  try {
-    const customerResult = await client.query<{ customer_id: string }>(
-      "select customer_id from customers where org_id = $1 and name = $2",
-      [input.orgId, input.customerName],
+  const customerResult = await client.query<{ customer_id: string }>(
+    "select customer_id from customers where org_id = $1 and name = $2",
+    [input.orgId, input.customerName],
+  );
+  if (customerResult.rows.length === 0) {
+    throw new OrderValidationError(
+      `No customer named "${input.customerName}" found in your company. Check list_orders or ` +
+        "get_sales_summary (groupBy customer) for existing customer names.",
     );
-    if (customerResult.rows.length === 0) {
-      throw new OrderValidationError(
-        `No customer named "${input.customerName}" found in your company. Check list_orders or ` +
-          "get_sales_summary (groupBy customer) for existing customer names.",
-      );
-    }
-    const customerId = customerResult.rows[0]!.customer_id;
-
-    const orderResult = await client.query<{ order_id: string }>(
-      "insert into orders (org_id, customer_id, order_date) values ($1, $2, $3) returning order_id",
-      [input.orgId, customerId, input.orderDate],
-    );
-    const orderId = orderResult.rows[0]!.order_id;
-
-    const lines: CreatedOrderLine[] = [];
-    let lineNo = 1;
-    for (const item of input.items) {
-      const productResult = await client.query<{ product_id: string; price: string }>(
-        "select product_id, price from products where org_id = $1 and name = $2",
-        [input.orgId, item.productName],
-      );
-      if (productResult.rows.length === 0) {
-        throw new OrderValidationError(
-          `No product named "${item.productName}" found in your company's catalog. Check ` +
-            "describe_schema or get_sales_summary (groupBy product) for existing product names.",
-        );
-      }
-      const { product_id: productId, price } = productResult.rows[0]!;
-
-      // Copies the catalog price at the moment of sale, same deliberate
-      // break from 3NF that step 5's migration made: a later catalog
-      // price change must never rewrite what this order already charged.
-      await client.query(
-        "insert into order_items (org_id, order_id, line_no, product_id, quantity, unit_price) values ($1, $2, $3, $4, $5, $6)",
-        [input.orgId, orderId, lineNo, productId, item.quantity, price],
-      );
-      lines.push({
-        productName: item.productName,
-        quantity: item.quantity,
-        unitPrice: price,
-        lineTotal: (Number(price) * item.quantity).toFixed(2),
-      });
-      lineNo += 1;
-    }
-
-    await client.query("commit");
-
-    return {
-      orderId,
-      orderDate: input.orderDate,
-      customerName: input.customerName,
-      items: lines,
-      orderTotal: lines.reduce((sum, line) => sum + Number(line.lineTotal), 0).toFixed(2),
-    };
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
   }
+  const customerId = customerResult.rows[0]!.customer_id;
+
+  const orderResult = await client.query<{ order_id: string }>(
+    "insert into orders (org_id, customer_id, order_date) values ($1, $2, $3) returning order_id",
+    [input.orgId, customerId, input.orderDate],
+  );
+  const orderId = orderResult.rows[0]!.order_id;
+
+  const lines: CreatedOrderLine[] = [];
+  let lineNo = 1;
+  for (const item of input.items) {
+    const productResult = await client.query<{ product_id: string; price: string }>(
+      "select product_id, price from products where org_id = $1 and name = $2",
+      [input.orgId, item.productName],
+    );
+    if (productResult.rows.length === 0) {
+      throw new OrderValidationError(
+        `No product named "${item.productName}" found in your company's catalog. Check ` +
+          "describe_schema or get_sales_summary (groupBy product) for existing product names.",
+      );
+    }
+    const { product_id: productId, price } = productResult.rows[0]!;
+
+    // Copies the catalog price at the moment of sale, same deliberate
+    // break from 3NF that step 5's migration made: a later catalog
+    // price change must never rewrite what this order already charged.
+    await client.query(
+      "insert into order_items (org_id, order_id, line_no, product_id, quantity, unit_price) values ($1, $2, $3, $4, $5, $6)",
+      [input.orgId, orderId, lineNo, productId, item.quantity, price],
+    );
+    lines.push({
+      productName: item.productName,
+      quantity: item.quantity,
+      unitPrice: price,
+      lineTotal: (Number(price) * item.quantity).toFixed(2),
+    });
+    lineNo += 1;
+  }
+
+  return {
+    orderId,
+    orderDate: input.orderDate,
+    customerName: input.customerName,
+    items: lines,
+    orderTotal: lines.reduce((sum, line) => sum + Number(line.lineTotal), 0).toFixed(2),
+  };
 }

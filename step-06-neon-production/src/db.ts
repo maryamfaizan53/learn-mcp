@@ -36,3 +36,25 @@ export async function withClient<T>(fn: (client: Client) => Promise<T>): Promise
     await client.end();
   }
 }
+
+// Every tool that touches a tenant-scoped table goes through this, not
+// withClient directly. Sets the company for *this transaction only*
+// (set_config's third argument, is_local = true) - never the whole
+// connection - so a connection Hyperdrive later hands to a different
+// request can't inherit a stale tenant setting left over from this one
+// (book lesson 19.9). The row-level security policies on every business
+// table read this same setting; this is the one place that sets it.
+export async function forTenant<T>(orgId: string, fn: (client: Client) => Promise<T>): Promise<T> {
+  return withClient(async (client) => {
+    await client.query("begin");
+    try {
+      await client.query("select set_config('app.tenant_id', $1, true)", [orgId]);
+      const result = await fn(client);
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
+  });
+}

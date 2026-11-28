@@ -4,12 +4,13 @@ import { createMcpHandler } from "agents/mcp/server";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
 import { getAuth, getMcpResource } from "./auth";
-import { withClient } from "./db";
+import { forTenant, withClient } from "./db";
 import { getIdentity, identityStorage } from "./identity";
 import { consentPage, loginPage } from "./pages";
 import {
   BUSINESS_QUESTIONS,
   COMPARE_QUESTIONS,
+  DEMO_ORG_ID,
   answerBusinessQuestion,
   compareDesigns,
   describeSchema,
@@ -119,7 +120,7 @@ function createServer(): McpServer {
     },
     async ({ question }) => {
       const { orgId } = getIdentity();
-      const rows = await withClient((client) => answerBusinessQuestion(client, question, orgId));
+      const rows = await forTenant(orgId, (client) => answerBusinessQuestion(client, question, orgId));
       return {
         content: [
           {
@@ -152,7 +153,12 @@ function createServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ question }) => {
-      const { flat, normalized, note } = await withClient((client) => compareDesigns(client, question));
+      // Always scoped to the fixed demo company, never the caller's own
+      // org: staging.flat_sales was never tenant-scoped in the first
+      // place, and the normalized side of this comparison only ever
+      // held the demo data - row-level security needs the tenant set to
+      // demo-company specifically for that side to return anything.
+      const { flat, normalized, note } = await forTenant(DEMO_ORG_ID, (client) => compareDesigns(client, question));
       return {
         content: [
           {
@@ -200,7 +206,7 @@ function createServer(): McpServer {
     },
     async ({ fromDate, toDate, customerName, productName, cursor, limit }) => {
       const { orgId } = getIdentity();
-      const result = await withClient((client) =>
+      const result = await forTenant(orgId, (client) =>
         listOrders(client, { orgId, fromDate, toDate, customerName, productName, cursor, limit }),
       );
       return {
@@ -235,7 +241,7 @@ function createServer(): McpServer {
     },
     async ({ groupBy }) => {
       const { orgId } = getIdentity();
-      const rows = await withClient((client) => getSalesSummary(client, groupBy, orgId));
+      const rows = await forTenant(orgId, (client) => getSalesSummary(client, groupBy, orgId));
       return {
         content: [
           {
@@ -289,7 +295,7 @@ function createServer(): McpServer {
     async ({ customerName, orderDate, items }) => {
       const { orgId } = getIdentity();
       try {
-        const order = await withClient((client) =>
+        const order = await forTenant(orgId, (client) =>
           createOrder(client, {
             orgId,
             customerName,

@@ -143,7 +143,7 @@ export const COMPARE_QUESTIONS = [
 
 export type CompareQuestion = (typeof COMPARE_QUESTIONS)[number];
 
-const DEMO_ORG_ID = "demo-company";
+export const DEMO_ORG_ID = "demo-company";
 
 const FLAT_SQL: Record<CompareQuestion, string> = {
   monthly_revenue: `
