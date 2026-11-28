@@ -16,10 +16,22 @@ if (existsSync(".dev.vars")) {
   process.loadEnvFile(".dev.vars");
 }
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
+// Every tenant database gets the exact same migrations, in the exact same
+// order - the shared one (DATABASE_URL), and one more per dedicated-tier
+// company (TENANT_DATABASE_URLS, comma-separated: the shared database's
+// own URL again, plus each dedicated company's own). No tool code ever
+// knows which database it's talking to, and migrations don't either - a
+// dedicated company's database just happens to end up with exactly one
+// company's rows in otherwise identical tables.
+const databaseUrls = process.env.TENANT_DATABASE_URLS
+  ? process.env.TENANT_DATABASE_URLS.split(",").map((url) => url.trim()).filter(Boolean)
+  : process.env.DATABASE_URL
+    ? [process.env.DATABASE_URL]
+    : [];
+if (databaseUrls.length === 0) {
   console.error(
-    "DATABASE_URL is not set. Add it to .dev.vars, or export it before running `npm run migrate`.",
+    "Neither DATABASE_URL nor TENANT_DATABASE_URLS is set. Add one to .dev.vars, or export it before " +
+      "running `npm run migrate`.",
   );
   process.exit(1);
 }
@@ -47,7 +59,7 @@ function splitStatements(sqlText: string): string[] {
     .filter((statement) => statement.length > 0);
 }
 
-async function main() {
+async function migrateOne(databaseUrl: string): Promise<void> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
@@ -89,10 +101,17 @@ async function main() {
       }
     }
 
-    console.log("Done.");
   } finally {
     await client.end();
   }
+}
+
+async function main() {
+  for (const [index, databaseUrl] of databaseUrls.entries()) {
+    console.log(`--- database ${index + 1}/${databaseUrls.length} ---`);
+    await migrateOne(databaseUrl);
+  }
+  console.log("Done.");
 }
 
 main().catch((error) => {

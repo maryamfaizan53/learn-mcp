@@ -284,18 +284,53 @@ describe("row-level security: no WHERE clause, RLS alone decides what's visible"
   });
 });
 
-// A tenant context tagged "dedicated" with no HYPERDRIVE_ENTERPRISE
-// binding configured must fail loudly, not silently fall back to the
-// shared database - that fallback would be the one bug that actually
-// mixes tiers. This step's own test environment has no second Hyperdrive
-// binding (no real dedicated-tier company exists to deploy one for yet -
-// see TENANCY.md), which is exactly the condition this proves is refused.
-describe("tenant router", () => {
-  it("refuses a dedicated-tier context with no HYPERDRIVE_ENTERPRISE binding, rather than falling back to shared", async () => {
-    const dedicatedCtx: TenantContext = { orgId: COMPANY_A, userId: "test-user", role: "admin", tier: "dedicated" };
-    await expect(forTenant(dedicatedCtx, (client) => client.query("select 1"))).rejects.toThrow(
-      /no HYPERDRIVE_ENTERPRISE binding configured/,
+// The dedicated tier, proven against a real second database
+// (enterprise_acme - see TENANCY.md), not a mock of one: a shared-tier
+// context and a dedicated-tier context reach two physically different
+// Postgres databases, and a dedicated-tier company's rows are invisible
+// to the shared tier (and to every other company) regardless.
+const ENTERPRISE_ORG = "tenancy-test-enterprise";
+
+function dedicatedCtx(orgId: string): TenantContext {
+  return { orgId, userId: "test-user", role: "admin", tier: "dedicated" };
+}
+
+describe("dedicated tier: a real second database, not just a different tier label", () => {
+  afterAll(async () => {
+    await forTenant(dedicatedCtx(ENTERPRISE_ORG), async (client) => {
+      await client.query("delete from order_items where org_id = $1", [ENTERPRISE_ORG]);
+      await client.query("delete from orders where org_id = $1", [ENTERPRISE_ORG]);
+      await client.query("delete from products where org_id = $1", [ENTERPRISE_ORG]);
+      await client.query("delete from customers where org_id = $1", [ENTERPRISE_ORG]);
+      await client.query("delete from categories where org_id = $1", [ENTERPRISE_ORG]);
+    });
+  });
+
+  it("a shared-tier and a dedicated-tier context reach different physical databases", async () => {
+    const sharedDb = await forTenant(ctxFor(COMPANY_A), (client) => client.query("select current_database()"));
+    const dedicatedDb = await forTenant(dedicatedCtx(ENTERPRISE_ORG), (client) =>
+      client.query("select current_database()"),
     );
+    expect(sharedDb.rows[0]?.current_database).not.toBe(dedicatedDb.rows[0]?.current_database);
+  });
+
+  it("the dedicated company's own rows are only ever visible through its own binding", async () => {
+    const ctx = dedicatedCtx(ENTERPRISE_ORG);
+    await forTenant(ctx, async (client) => {
+      await client.query("insert into categories (org_id, name) values ($1, 'Enterprise Category')", [
+        ENTERPRISE_ORG,
+      ]);
+      await client.query("insert into customers (org_id, name, email, city) values ($1, 'Enterprise Customer', $2, 'HQ')", [
+        ENTERPRISE_ORG,
+        "enterprise-customer@example.com",
+      ]);
+    });
+    const throughShared = await forTenant(ctxFor(COMPANY_A), (client) =>
+      client.query("select name from customers where org_id = $1", [ENTERPRISE_ORG]),
+    );
+    expect(throughShared.rows).toHaveLength(0);
+    const throughDedicated = await forTenant(ctx, (client) => client.query("select name from customers"));
+    expect(throughDedicated.rows.map((r) => r.name)).toEqual(["Enterprise Customer"]);
   });
 });
 
