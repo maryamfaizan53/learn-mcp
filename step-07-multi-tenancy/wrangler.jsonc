@@ -1,0 +1,70 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "learn-mcp-step-07",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-25",
+  // agents/mcp/server uses AsyncLocalStorage, which Workers only exposes under nodejs_compat.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // Better Auth's own data (users, sessions, OAuth clients). Deliberately
+  // the SAME D1 database step 4 (and step 5) use, not a fresh one: auth
+  // isn't part of what this step changes (that's Neon, below), and this
+  // step doesn't touch the auth schema. Sign in with the same account you
+  // used in steps 4 and 5. IMPORTANT (learned the hard way in step 5):
+  // sharing this database means BETTER_AUTH_SECRET must be set to the
+  // EXACT SAME value on every Worker that shares it, not just a freshly
+  // generated one - Better Auth's jwt() plugin stores its signing key
+  // encrypted in this database under whichever secret created it, and a
+  // different secret can't decrypt it. Use the same value you set for
+  // learn-mcp-step-04, learn-mcp-step-05 and learn-mcp-step-06.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "learn-mcp-step-04-auth",
+      "database_id": "6a254ac6-9677-439b-afec-0d4afcd2bcb8"
+    }
+  ],
+  // The exact URL this Worker is reachable at - tokens are bound to
+  // `${MCP_BASE_URL}/mcp` (RFC 8707), so this must match precisely. Update
+  // it to the real https://learn-mcp-step-07.<subdomain>.workers.dev before
+  // deploying; localhost is only correct for `wrangler dev`.
+  "vars": {
+    "MCP_BASE_URL": "http://localhost:8787"
+  },
+  // Hyperdrive pools and speeds up the connection to Neon from Workers.
+  // HYPERDRIVE is the SHARED-tier binding: every company on the shared
+  // tier reaches the step-07 branch through this one, with row-level
+  // security (from step 6) as the actual isolation boundary between
+  // them. Created with `wrangler hyperdrive create learn-mcp-step-07
+  // --connection-string="<direct, non-pooled Neon connection string for
+  // the least-privilege learn_mcp_connector role, on the step-07
+  // branch>" --caching-disabled`. Query caching stays off for the same
+  // reason as step 6: a cache that doesn't know about the per-request
+  // tenant setting could hand one company another's cached rows (book
+  // lesson 19.9). A second binding, HYPERDRIVE_ENTERPRISE, is added once
+  // this step creates its first dedicated-tier company's own database.
+  // Neither id below is a secret - the actual Neon credentials live only
+  // on Cloudflare's side, configured once via the commands that created
+  // them.
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "REPLACE_WITH_STEP07_SHARED_HYPERDRIVE_ID" }],
+  // BETTER_AUTH_SECRET is NOT listed here - "vars" is committed to git.
+  // It's a secret: set it locally in .dev.vars and in production with
+  // `wrangler secret put BETTER_AUTH_SECRET` (see src/auth.ts). For
+  // local `wrangler dev`, Hyperdrive is bypassed in favor of a direct
+  // connection to the step-07-dev branch, set with the
+  // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE variable in
+  // .dev.vars (Cloudflare's documented local-dev override for a
+  // Hyperdrive binding - never the production connection string).
+  // @modelcontextprotocol/server imports zod via the "zod/v4" subpath,
+  // while better-auth's packages import plain "zod" - both resolve to the
+  // same underlying file, but as two different wrapper modules, which
+  // esbuild bundles as two separate copies of zod's internals. That's the
+  // confirmed cause of a "ZodLazy is not a constructor" crash at Worker
+  // startup (reproduced by isolating the Better Auth plugin stack alone,
+  // which builds fine - the crash only appears once @modelcontextprotocol/
+  // server's "zod/v4" import is in the same bundle too). Aliasing collapses
+  // both specifiers onto the exact same module.
+  "alias": { "zod/v4": "zod" }
+}

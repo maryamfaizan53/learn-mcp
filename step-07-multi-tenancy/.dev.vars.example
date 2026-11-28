@@ -1,0 +1,21 @@
+# Copy this file to .dev.vars (gitignored) and fill in real values for
+# local `wrangler dev` and `npm test`. In production, BETTER_AUTH_SECRET
+# is set with `wrangler secret put BETTER_AUTH_SECRET` - never put a
+# real secret in wrangler.jsonc's committed "vars". DATABASE_URL and the
+# Hyperdrive local connection string are local-only; production reaches
+# Neon through the Hyperdrive binding instead.
+
+# Same value as steps 4 and 5 use (sharing the D1 auth database means
+# sharing this secret too). Generate one with: openssl rand -base64 32
+BETTER_AUTH_SECRET=replace-with-a-real-random-secret-at-least-32-chars
+
+# The owner role's (neondb_owner) connection string for your step-06-dev
+# branch, used only by db/migrate.ts, db/query.ts and db/seed-my-company.ts.
+DATABASE_URL=replace-with-your-neon-branch-owner-connection-string
+
+# The least-privilege learn_mcp_connector role's connection string for
+# your step-06-dev branch. `wrangler dev` and `npm test` read this
+# themselves (via wrangler's own --env-file flag and vitest.config.ts)
+# to bypass Hyperdrive locally, since Hyperdrive itself only exists once
+# deployed. Never the production connection string.
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=replace-with-the-connector-roles-connection-string
