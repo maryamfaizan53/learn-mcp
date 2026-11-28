@@ -30,14 +30,53 @@ either of the two real reasons a company would ask to leave the shared
 tier.
 
 No tool, resource or prompt ever knows which tier it's running against:
-the tenant router (`src/tenant-router.ts`) is the one place that decides,
-based on the verified tenant context's `tier`, which Hyperdrive binding to
-use. Both tiers run the exact same migrations, the exact same tool code,
-and the exact same row-level security policies - the dedicated database
-just happens to have exactly one company's rows in it.
+`bindingFor()` in `src/db.ts` is the one place that decides, based on the
+verified tenant context's `tier`, which Hyperdrive binding to use. Both
+tiers run the exact same migrations, the exact same tool code, and the
+exact same row-level security policies - the dedicated database just
+happens to have exactly one company's rows in it.
 
 ## Cross-tenant test results
 
 See `test/tenancy.test.ts`. Run with `npm test`.
 
-<!-- Filled in once the suite exists and has been run for real. -->
+- **Row-level security, no WHERE clause** - two throwaway companies
+  seeded directly through `forTenant`, then read back with queries that
+  have no `org_id` filter of their own. Acting as company A never sees
+  company B's categories, customers, products, orders or settings;
+  explicitly asking for company B's `org_id` is still refused;
+  `createOrder` for company A can't be tricked into naming company B's
+  customer. RLS itself is what blocks every one of these, not
+  application code remembering a filter.
+- **Tenant router fail-closed check** - a tenant context tagged
+  `tier: "dedicated"` with no `HYPERDRIVE_ENTERPRISE` binding configured
+  throws a clear configuration error. It never silently falls back to
+  the shared binding, which is the one bug that would actually mix
+  tiers.
+- **Cross-tenant isolation through the real `/mcp` path** - two
+  companies signed up for real, each getting its own token the normal
+  way (sign-up -> OAuth authorize -> token exchange, never a
+  hand-crafted JWT). Company B's `list_orders` never sees company A's
+  order; `update_company_settings` on company A never changes what
+  company B's `get_company_settings` (and its KV cache, keyed by
+  `tenantKey(ctx, "settings")`) reads back.
+- **Removal revokes access immediately** - an admin's `remove_member`
+  deletes a teammate's D1 membership row; that teammate's very next
+  tool call (with the same still-unexpired access token) is refused,
+  because membership is re-checked against the database on every
+  request and never cached.
+
+This step's sandbox can't open a raw Postgres connection to Neon (every
+Hyperdrive-backed query fails with "Connection terminated unexpectedly" -
+the same limitation steps 5 and 6 ran into, not a bug in this code), so
+only the one test above with no network dependency (the tenant router
+check) actually ran there. The full suite needs to be run for real once
+deployed - see the submission checklist.
+
+**Not yet verified for real:** this step hasn't created an actual second,
+dedicated-tier company with its own Neon database and `HYPERDRIVE_ENTERPRISE`
+binding - every company so far is on the shared tier, which is this
+server's default. The tenant router's dedicated-tier *code path* is
+exercised by the fail-closed test above, but genuine dedicated-tier
+isolation (a second real database, reachable through its own binding)
+still needs that company to exist before it can be proven end to end.
