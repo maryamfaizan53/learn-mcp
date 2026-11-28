@@ -97,15 +97,110 @@ matching exactly what step 5 already verified for this same seeded
 company - proof the new connection path returns the same, correct,
 company-scoped data as step 5's HTTP-driver path did.
 
+## `list_orders`, `get_sales_summary`, `create_order`
+
+All three built and deployed. `list_orders` paginates with a keyset
+cursor on `order_id` (not `OFFSET`, which shifts under a concurrent
+insert), plus optional date range, customer name and product name
+filters - the product filter is an `EXISTS` against `order_items`/
+`products`, not a join, so it can't multiply or drop rows. One real bug
+found by testing with a live client rather than just locally: `pg`
+parses Postgres `date` columns into native JS `Date` objects, which
+broke `list_orders`' own `z.string()` output schema the first time a
+real client called it - fixed with `to_char(order_date, 'YYYY-MM-DD')`
+in the SQL, same pattern `sales.ts` already used for months.
+
+`get_sales_summary` reuses `answer_business_question`'s own fixed
+queries (`monthly_revenue`, `top_products`, `best_customers`) behind a
+`groupBy` enum, rather than duplicating SQL.
+
+`create_order` looks up the customer and each product by name
+(org-scoped - the same query that would 404 on a nonexistent name
+returns the identical nothing for an existing name in another company,
+so the two cases are indistinguishable by design), copies the catalog
+price into the order line, and inserts the order and every line in one
+transaction.
+
+## Row-level security
+
+`FORCE ROW LEVEL SECURITY` plus a `USING`/`WITH CHECK` policy on every
+business table, comparing `org_id` to `current_setting('app.tenant_id',
+true)`. `db.ts`'s `forTenant(orgId, fn)` is the one place that sets it:
+opens a transaction, `set_config('app.tenant_id', orgId, true)` -
+`true` scopes it to that transaction only, so a connection Hyperdrive
+later reuses for a different request can't inherit it (book lesson
+19.9) - runs the tool's queries, commits. Every tool that touches a
+tenant-scoped table goes through it now, not plain `withClient`.
+`compare_designs` is the one exception worth noting: it always calls
+`forTenant(DEMO_ORG_ID, ...)`, never the caller's own org, since the
+normalized side of that comparison only ever held the demo company's
+data.
+
+### What testing the three "planted bugs" actually found
+
+Tested directly against the real database (via the Neon MCP connector,
+connecting as `learn_mcp_connector` itself) before trusting any of
+this:
+
+- **No tenant set at all** ("a query outside `forTenant`"): zero rows,
+  every time - `current_setting(..., true)` returns null, and
+  `org_id = null` is never true. Safe by construction.
+- **No `WHERE` clause in the query itself**: also zero rows. This was
+  the most useful thing to actually prove, not just assert - row-level
+  security's whole point is that the database adds the filter whether
+  or not the query remembered to. A tool that forgot a `WHERE org_id =
+  $1` is still safe, just redundant to have added it (which every tool
+  here still does, as the first line of defense, not the only one).
+- **Missing `WITH CHECK`**: tried this first and it turned out *not* to
+  be a bug - Postgres silently reuses the `USING` clause for
+  `WITH CHECK` when none is given, confirmed by reading `pg_policies`.
+  So this specific omission isn't exploitable, which was worth learning
+  directly rather than assuming.
+- **A genuinely permissive `WITH CHECK (true)`**, deliberately swapped
+  in for `customers`' real policy: this *was* exploitable. Connected as
+  `learn_mcp_connector`, tenant set to the real signed-in company, a
+  plain `INSERT ... VALUES ('demo-company', ...)` succeeded - writing a
+  row into another company's namespace, even though that company could
+  still never read it back (`USING` was untouched and still correct).
+  Reverting to the matching `WITH CHECK` blocked the exact same insert
+  immediately. This is the real shape of the bug class lesson 19.10
+  warns about: `USING` alone protects reads; only a correct
+  `WITH CHECK` protects writes, and the two can drift independently.
+- One implementation note from testing this: the first few attempts to
+  reproduce the exploit, sent as separate statements through the Neon
+  MCP connector's own "transaction" tool, didn't reproduce it - only
+  wrapping `set_config` and the `INSERT` in a single `DO $$ ... $$`
+  block (one genuinely single SQL statement) did. This doesn't affect
+  the Worker's own code, which already uses one real `pg.Client`
+  session for an entire `forTenant()` call - it's a quirk of how that
+  particular admin tool batches multiple statements, not of Postgres
+  session/transaction semantics in general.
+
+### Other lesson 19.10 gaps, checked
+
+- **No `SECURITY DEFINER` functions** exist in this database at all
+  (confirmed against `pg_proc`), so there's nothing the connector role
+  could reach to bypass RLS through.
+- **No rows appear in logs or errors.** `OrderValidationError`'s
+  messages echo back the caller's own input (the name they typed),
+  never anything read from another row.
+- **The company is in every key** already, from step 5's design.
+
+### `test/row-level-security.test.ts`
+
+Two throwaway companies (`rls-test-company-a`/`-b`), seeded and torn
+down by the test itself, acting as company A through the same
+`forTenant()`/`createOrder()` every real tool call uses - the real
+tenant boundary, not a mock of it. Couldn't run this from the sandbox
+used to build it (raw Postgres TCP is blocked there), so it's
+unverified until run for real; the policy-level findings above were
+all confirmed independently, directly against the database.
+
 ## Not yet done
 
-- `list_orders` (filters + cursor pagination) and `get_sales_summary`.
-- `create_order` (validated, transactional write tool).
-- Row-level security on every business table (`FORCE ROW LEVEL
-  SECURITY`, `USING`/`WITH CHECK`, `forTenant(ctx, fn)` helper).
-- Closing the gaps row-level security doesn't cover on its own (book
-  lesson 19.10): identical "not found" errors, no `SECURITY DEFINER`
-  functions reachable by the connector role, no rows in logs.
-- The data matrix test (book lesson 19.12) with three planted bugs to
-  catch and then remove.
+- Final cross-client deploy verification for `create_order` (blocked
+  earlier by a stale connector tool-list in Claude - the server side is
+  confirmed correct, this just needs a clean retry) and for the new
+  `test/row-level-security.test.ts` (needs running somewhere with real
+  Postgres network access).
 - SSO (carried over as optional from steps 4-5) - not attempted.
