@@ -48,11 +48,14 @@ See `test/tenancy.test.ts`. Run with `npm test`.
   `createOrder` for company A can't be tricked into naming company B's
   customer. RLS itself is what blocks every one of these, not
   application code remembering a filter.
-- **Tenant router fail-closed check** - a tenant context tagged
-  `tier: "dedicated"` with no `HYPERDRIVE_ENTERPRISE` binding configured
-  throws a clear configuration error. It never silently falls back to
-  the shared binding, which is the one bug that would actually mix
-  tiers.
+- **The dedicated tier is a real second database, not just a label** -
+  `enterprise_acme`, a second Neon database on this step's own branch,
+  with the exact same migrations (including row-level security) applied
+  as the shared database. A shared-tier context and a dedicated-tier
+  context reach two different physical databases (`current_database()`
+  differs); a dedicated company's rows are invisible through the shared
+  binding, and vice versa - two independent layers (RLS, and which
+  database the connection even is) rather than one.
 - **Cross-tenant isolation through the real `/mcp` path** - two
   companies signed up for real, each getting its own token the normal
   way (sign-up -> OAuth authorize -> token exchange, never a
@@ -69,14 +72,12 @@ See `test/tenancy.test.ts`. Run with `npm test`.
 This step's sandbox can't open a raw Postgres connection to Neon (every
 Hyperdrive-backed query fails with "Connection terminated unexpectedly" -
 the same limitation steps 5 and 6 ran into, not a bug in this code), so
-only the one test above with no network dependency (the tenant router
-check) actually ran there. The full suite needs to be run for real once
-deployed - see the submission checklist.
+none of the tests above have actually run yet. The full suite needs to
+be run for real once deployed - see the submission checklist.
 
-**Not yet verified for real:** this step hasn't created an actual second,
-dedicated-tier company with its own Neon database and `HYPERDRIVE_ENTERPRISE`
-binding - every company so far is on the shared tier, which is this
-server's default. The tenant router's dedicated-tier *code path* is
-exercised by the fail-closed test above, but genuine dedicated-tier
-isolation (a second real database, reachable through its own binding)
-still needs that company to exist before it can be proven end to end.
+**Not yet verified for real:** `enterprise_acme` exists and has the right
+schema, but no real company is actually marked `tier = 'dedicated'` in
+the `tenants` table yet - that happens once a second real company exists
+to assign it to, and `HYPERDRIVE_ENTERPRISE`'s id in `wrangler.jsonc` is
+still a placeholder until that Hyperdrive config is created from
+`enterprise_acme`'s own connection string.
